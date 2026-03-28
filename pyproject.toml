@@ -38,7 +38,7 @@ imprint-memory = "imprint_memory.server:main"
 
 [build-system]
 requires = ["hatchling"]
-build-backend = "hatchling.backends"
+build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["imprint_memory"]
