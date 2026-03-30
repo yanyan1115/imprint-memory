@@ -72,6 +72,7 @@ Claude Code will automatically have access to these tools:
 | `message_bus_read` | Read recent message bus history |
 | `message_bus_post` | Write to the message bus |
 | `conversation_search` | Search conversation history by keyword |
+| `memory_reindex` | Rebuild all embeddings (after switching providers) |
 | `cc_execute` | Submit a task for Claude Code |
 | `cc_check` | Check task status |
 | `cc_tasks` | List recent tasks |
@@ -85,20 +86,41 @@ All configuration via environment variables:
 | `IMPRINT_DATA_DIR` | `~/.imprint/` | Base directory for all data |
 | `IMPRINT_DB` | `$IMPRINT_DATA_DIR/memory.db` | SQLite database path |
 | `TZ_OFFSET` | `0` | Hours offset from UTC (e.g., `12` for NZST) |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint for embeddings |
-| `EMBED_MODEL` | `bge-m3` | Embedding model name |
+| `EMBED_PROVIDER` | `ollama` | Embedding provider: `ollama` or `openai` |
+| `EMBED_MODEL` | auto | Model name (defaults: `bge-m3` for ollama, `text-embedding-3-small` for openai) |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
+| `OPENAI_API_KEY` | — | API key for OpenAI-compatible providers |
+| `EMBED_API_BASE` | `https://api.openai.com` | Base URL for OpenAI-compatible API |
 | `MESSAGE_BUS_LIMIT` | `40` | Max messages in the bus (rolling window) |
 
-### Vector search (optional)
+### Embedding providers
 
-Vector search requires [Ollama](https://ollama.com/) running locally with the bge-m3 model:
+**Option A: Ollama (local, default)** — Free, private, requires local GPU/CPU.
 
 ```bash
 ollama pull bge-m3
 ollama serve
 ```
 
-Without Ollama, the system falls back to FTS5 keyword search only — still functional, just less semantic.
+**Option B: OpenAI API** — No local GPU needed, pay-per-use.
+
+```bash
+export EMBED_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
+```
+
+**Option C: Any OpenAI-compatible API** — Works with Voyage AI, Azure OpenAI, Google Gemini, etc.
+
+```bash
+export EMBED_PROVIDER=openai
+export OPENAI_API_KEY=your-api-key
+export EMBED_API_BASE=https://your-provider.com  # e.g., https://api.voyageai.com
+export EMBED_MODEL=your-model-name               # e.g., voyage-3-lite
+```
+
+**No embedding provider?** The system falls back to FTS5 keyword search only — still functional, just less semantic.
+
+**Switching providers:** After switching, run the `memory_reindex` tool to rebuild embeddings with the new provider.
 
 ### Bank files
 
@@ -128,6 +150,29 @@ Configure OAuth credentials via `~/.imprint-oauth.json`:
 ```
 
 Or via environment variables: `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_ACCESS_TOKEN`.
+
+### Cloud server deployment
+
+Run imprint-memory on a cloud server for 24/7 access:
+
+```bash
+# 1. Install on your server
+pip install git+https://github.com/Qizhan7/imprint-memory.git[http]
+
+# 2. Set up embedding (choose one)
+export EMBED_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
+# Or skip for keyword-only search
+
+# 3. Start HTTP server
+imprint-memory --http
+# Listens on 0.0.0.0:8000
+
+# 4. Expose via Cloudflare Tunnel (recommended) or Nginx + HTTPS
+cloudflared tunnel --url http://localhost:8000
+```
+
+Then in Claude Code on your local machine, add the remote MCP server URL.
 
 ## Data storage
 

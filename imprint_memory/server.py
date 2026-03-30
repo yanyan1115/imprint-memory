@@ -25,6 +25,7 @@ from mcp.server.fastmcp import FastMCP
 from .memory_manager import (
     remember, search_text, forget, daily_log, get_all,
     delete_memory, update_memory, find_duplicates, find_stale,
+    reindex_embeddings,
 )
 from .bus import bus_post, bus_format
 from .tasks import submit_task, check_task, list_tasks
@@ -113,6 +114,13 @@ def memory_find_duplicates(threshold: float = 0.85) -> str:
             f"    B: {p['content_b']}"
         )
     return "\n".join(lines)
+
+
+@mcp.tool()
+def memory_reindex() -> str:
+    """Rebuild all memory embeddings with the current provider.
+    Use after switching embedding providers (e.g., from Ollama to OpenAI)."""
+    return reindex_embeddings()
 
 
 @mcp.tool()

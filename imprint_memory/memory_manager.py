@@ -18,9 +18,19 @@ from .db import (
 )
 
 # ─── Embedding Config ────────────────────────────────────
+EMBED_PROVIDER = os.environ.get("EMBED_PROVIDER", "ollama")  # "ollama" or "openai"
+
+# Ollama settings
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-m3")
-EMBED_DIM = 1024
+
+# OpenAI-compatible settings (also works with Voyage AI, Azure, etc.)
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+EMBED_API_BASE = os.environ.get("EMBED_API_BASE", "https://api.openai.com")
+
+# Model defaults per provider
+_DEFAULT_MODELS = {"ollama": "bge-m3", "openai": "text-embedding-3-small"}
+EMBED_MODEL = os.environ.get("EMBED_MODEL", _DEFAULT_MODELS.get(EMBED_PROVIDER, "bge-m3"))
+
 BANK_INDEX_VERSION = 2
 
 # Hybrid search weights
@@ -31,8 +41,8 @@ WEIGHT_RECENCY = 0.2
 
 # ─── Vector Embeddings ───────────────────────────────────
 
-def _embed(text: str) -> Optional[list[float]]:
-    """Call Ollama to generate embedding vector. Returns None on failure."""
+def _embed_ollama(text: str) -> Optional[list[float]]:
+    """Generate embedding via Ollama (local)."""
     try:
         payload = json.dumps({"model": EMBED_MODEL, "input": text}).encode()
         req = urllib.request.Request(
@@ -43,11 +53,46 @@ def _embed(text: str) -> Optional[list[float]]:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
             embeddings = data.get("embeddings", [])
-            if embeddings and len(embeddings[0]) == EMBED_DIM:
+            if embeddings and len(embeddings[0]) > 0:
                 return embeddings[0]
     except Exception:
         pass
     return None
+
+
+def _embed_openai(text: str) -> Optional[list[float]]:
+    """Generate embedding via OpenAI-compatible API.
+    Works with: OpenAI, Voyage AI, Azure OpenAI, any OpenAI-compatible service.
+    Set EMBED_API_BASE to point to your provider."""
+    if not OPENAI_API_KEY:
+        return None
+    try:
+        url = f"{EMBED_API_BASE.rstrip('/')}/v1/embeddings"
+        payload = json.dumps({"model": EMBED_MODEL, "input": text}).encode()
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+            items = data.get("data", [])
+            if items and "embedding" in items[0]:
+                return items[0]["embedding"]
+    except Exception:
+        pass
+    return None
+
+
+def _embed(text: str) -> Optional[list[float]]:
+    """Generate embedding vector using configured provider.
+    Returns None on failure (search falls back to FTS5 keyword only)."""
+    if EMBED_PROVIDER == "openai":
+        return _embed_openai(text)
+    return _embed_ollama(text)
 
 
 def _vec_to_blob(vec: list[float]) -> bytes:
@@ -60,6 +105,8 @@ def _blob_to_vec(blob: bytes) -> list[float]:
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    if len(a) != len(b):
+        return 0.0  # Different embedding dimensions — incomparable
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
@@ -442,6 +489,32 @@ def find_duplicates(threshold: float = 0.85) -> list[dict]:
                 })
     pairs.sort(key=lambda x: x["similarity"], reverse=True)
     return pairs
+
+
+def reindex_embeddings() -> str:
+    """Rebuild all memory embeddings using the current provider.
+    Useful after switching embedding providers (e.g., ollama → openai)."""
+    db = _get_db()
+    rows = db.execute("SELECT id, content FROM memories").fetchall()
+    total = len(rows)
+    updated = 0
+    failed = 0
+
+    for r in rows:
+        vec = _embed(r["content"])
+        db.execute("DELETE FROM memory_vectors WHERE memory_id = ?", (r["id"],))
+        if vec:
+            db.execute(
+                "INSERT INTO memory_vectors (memory_id, embedding, model) VALUES (?, ?, ?)",
+                (r["id"], _vec_to_blob(vec), EMBED_MODEL),
+            )
+            updated += 1
+        else:
+            failed += 1
+
+    db.commit()
+    db.close()
+    return f"Reindexed {updated}/{total} memories ({failed} failed). Provider: {EMBED_PROVIDER}, model: {EMBED_MODEL}"
 
 
 def find_stale(days: int = 14) -> list[dict]:
