@@ -695,22 +695,35 @@ def _search_bank(query_vec, query_text: str, limit: int = 5) -> list[dict]:
 
 # ─── MEMORY.md Index Rebuild ─────────────────────────────
 
-MAX_MEMORY_MD_CHARS = 20000
+def _summarize_for_index(content, max_len=50):
+    """Truncate memory content to a short index pointer."""
+    text = content.strip()
+    for sep in ("：", "——", "—", "。", "，", "；"):
+        idx = text.find(sep)
+        if 0 < idx <= max_len:
+            return text[:idx]
+    for sep in (":", ", "):
+        idx = text.find(sep)
+        if 10 < idx <= max_len:
+            return text[:idx]
+    if len(text) > max_len:
+        return text[:max_len] + "…"
+    return text
 
 
 def _rebuild_index():
-    """Rebuild MEMORY.md — grouped by category, sorted by importance."""
+    """Rebuild MEMORY.md as a lightweight index (date + keyword per line).
+    Full content is available via memory_search."""
     db = _get_db()
     lines = ["# Memory Index\n", f"*Last updated: {now_str()}*\n"]
 
     total = db.execute("SELECT COUNT(*) as c FROM memories WHERE superseded_by IS NULL").fetchone()["c"]
-    lines.append(f"*{total} memories*\n")
+    lines.append(f"*{total} memories — use memory_search for details*\n")
 
     categories = db.execute(
         "SELECT DISTINCT category FROM memories WHERE superseded_by IS NULL ORDER BY category"
     ).fetchall()
 
-    char_count = sum(len(l) for l in lines)
     for cat_row in categories:
         cat = cat_row["category"]
         rows = db.execute(
@@ -724,17 +737,12 @@ def _rebuild_index():
 
         section = [f"\n## {cat}"]
         for r in rows:
-            line = f"- {r['content']}"
-            new_chars = char_count + len("\n".join(section)) + len(line) + 2
-            if new_chars > MAX_MEMORY_MD_CHARS:
-                section.append("- ...(use memory_search for more)")
-                break
-            section.append(line)
+            date = r["created_at"][:10] if r["created_at"] else ""
+            short_date = date[5:].replace("-", "/") if date else ""
+            summary = _summarize_for_index(r["content"])
+            section.append(f"- [{short_date}] {summary}")
 
         lines.extend(section)
-        char_count = sum(len(l) for l in lines)
-        if char_count > MAX_MEMORY_MD_CHARS:
-            break
 
     db.close()
 
