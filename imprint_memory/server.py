@@ -24,7 +24,7 @@ if __name__ == "__main__" or not __package__:
 from mcp.server.fastmcp import FastMCP
 from .memory_manager import (
     remember, search_text, forget, daily_log, get_all,
-    delete_memory, update_memory, find_duplicates, find_stale,
+    delete_memory, update_memory, find_duplicates, find_stale, decay,
     reindex_embeddings,
 )
 from .bus import bus_post, bus_format
@@ -44,9 +44,10 @@ mcp = FastMCP(
 
 @mcp.tool()
 def memory_remember(content: str, category: str = "general", source: str = "cc", importance: int = 5) -> str:
-    """Store a memory. Call this when you encounter important information.
+    """Store a memory. Call this when you encounter important information worth recalling in future conversations.
     category: facts/events/tasks/experience/general
-    source: free-form label for where the info came from (e.g. cc, chat, api)"""
+    source: free-form label for where the info came from (e.g. cc, chat, api)
+    DO NOT store: code patterns/file paths derivable from the codebase, git history, or info already in CLAUDE.md."""
     return remember(content=content, category=category, source=source, importance=importance)
 
 
@@ -138,6 +139,27 @@ def memory_find_stale(days: int = 14) -> str:
     return "\n".join(lines)
 
 
+@mcp.tool()
+def memory_decay(days: int = 30, dry_run: bool = True) -> str:
+    """Decay importance of inactive memories. Memories not recalled for `days` days
+    get importance -1. Reaches 0 → archived (hidden from search).
+    dry_run=True (default): preview only. dry_run=False: apply changes."""
+    result = decay(days=days, dry_run=dry_run)
+    mode = "DRY RUN" if result["dry_run"] else "APPLIED"
+    lines = [f"[{mode}] Decayed: {result['decayed']}, Archived: {result['archived']}"]
+    if result["details_decayed"]:
+        lines.append("\nDecayed:")
+        for d in result["details_decayed"]:
+            lines.append(f"  #{d['id']} [{d['category']}] {d['importance']} — {d['content']}")
+    if result["details_archived"]:
+        lines.append("\nArchived (importance → 0):")
+        for a in result["details_archived"]:
+            lines.append(f"  #{a['id']} [{a['category']}] {a['importance']} — {a['content']}")
+    if not result["details_decayed"] and not result["details_archived"]:
+        lines.append("No memories need decay at this time.")
+    return "\n".join(lines)
+
+
 # --- Message Bus Tools ------------------------------------------------
 
 @mcp.tool()
@@ -171,21 +193,33 @@ def conversation_search(query: str, platform: str = "", limit: int = 20) -> str:
 # --- CC Task Tools ----------------------------------------------------
 
 @mcp.tool()
-def cc_execute(prompt: str) -> str:
-    """Submit a task for local Claude Code to execute. For: writing code, running scripts, git ops, etc.
-    Returns a task_id. Use cc_check(task_id) to check results later."""
-    result = submit_task(prompt=prompt, source="chat")
+def cc_execute(prompt: str, session_id: str = "") -> str:
+    """Run a task on the local Claude Code instance (writes code, runs scripts, git ops, etc).
+    The task runs async — call cc_check(task_id) to poll for results.
+
+    MULTI-TURN: To continue a previous CC session (so CC remembers prior context),
+    pass the session_id returned by cc_check. Without session_id, a fresh CC session starts.
+
+    Workflow:
+      1. cc_execute("do X") → get task_id
+      2. cc_check(task_id) → get result + session_id
+      3. cc_execute("now do Y", session_id="...") → continues same CC session"""
+    result = submit_task(prompt=prompt, source="chat", session_id=session_id)
     bus_post("cc_task", "out", f"[Task submitted] {prompt[:150]}")
-    return f"{result['message']}\nUse cc_check(task_id={result['task_id']}) to check results"
+    return f"{result['message']}\nUse cc_check(task_id={result['task_id']}) to get results and session_id"
 
 
 @mcp.tool()
 def cc_check(task_id: int) -> str:
-    """Check CC task status and results."""
+    """Check CC task status and results. Returns session_id for multi-turn follow-ups.
+    If status is 'running', wait a few seconds and check again."""
     result = check_task(task_id)
     if "error" in result:
         return f"Error: {result['error']}"
-    lines = [f"Task #{result['task_id']}", f"Status: {result['status']}", f"Created: {result['created_at']}"]
+    lines = [f"Task #{result['task_id']}", f"Status: {result['status']}"]
+    if result.get('session_id'):
+        lines.append(f"Session ID: {result['session_id']}")
+    lines.append(f"Created: {result['created_at']}")
     if result['started_at']:
         lines.append(f"Started: {result['started_at']}")
     if result['completed_at']:
@@ -193,20 +227,21 @@ def cc_check(task_id: int) -> str:
     if result['result']:
         lines.append(f"\n--- Result ---\n{result['result']}")
     else:
-        lines.append("\nStill running...")
+        lines.append("\nStill running... call cc_check again in a few seconds.")
     return "\n".join(lines)
 
 
 @mcp.tool()
 def cc_tasks(limit: int = 5) -> str:
-    """List recent CC tasks."""
+    """List recent CC tasks with their status and session IDs."""
     task_list = list_tasks(limit=limit)
     if not task_list:
         return "No tasks"
     lines = []
     for t in task_list:
         icon = {"pending": "waiting", "running": "running", "completed": "done", "error": "error", "timeout": "timeout"}.get(t["status"], "?")
-        lines.append(f"[{icon}] #{t['task_id']} [{t['status']}] {t['prompt']}")
+        sid = f" sid={t['session_id'][:8]}..." if t.get("session_id") else ""
+        lines.append(f"[{icon}] #{t['task_id']} [{t['status']}]{sid} {t['prompt']}")
     return "\n".join(lines)
 
 

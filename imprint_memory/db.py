@@ -85,6 +85,7 @@ def _init_tables(db: sqlite3.Connection):
             status TEXT DEFAULT 'pending',
             result TEXT,
             source TEXT DEFAULT 'chat',
+            session_id TEXT DEFAULT '',
             created_at TEXT NOT NULL,
             started_at TEXT,
             completed_at TEXT
@@ -118,6 +119,30 @@ def _init_tables(db: sqlite3.Connection):
     if "superseded_by" not in mem_cols:
         try:
             db.execute("ALTER TABLE memories ADD COLUMN superseded_by INTEGER REFERENCES memories(id) ON DELETE SET NULL")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+    # Migration: add summary column to conversation_log
+    convlog_cols = {
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        for row in db.execute("PRAGMA table_info(conversation_log)").fetchall()
+    }
+    if "summary" not in convlog_cols:
+        try:
+            db.execute("ALTER TABLE conversation_log ADD COLUMN summary TEXT DEFAULT ''")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+    # Migration: add session_id column to cc_tasks
+    cctask_cols = {
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        for row in db.execute("PRAGMA table_info(cc_tasks)").fetchall()
+    }
+    if "session_id" not in cctask_cols:
+        try:
+            db.execute("ALTER TABLE cc_tasks ADD COLUMN session_id TEXT DEFAULT ''")
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise

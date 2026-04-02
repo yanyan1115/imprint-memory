@@ -3,7 +3,7 @@ Conversation log — Layer 3 of the memory architecture.
 Stores full conversation history from all platforms with FTS5 search.
 """
 
-from .db import _get_db, now_str, LOCAL_TZ, PROJECT_DIR
+from .db import _get_db, now_str, LOCAL_TZ
 from datetime import datetime
 
 

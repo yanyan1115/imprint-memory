@@ -73,9 +73,21 @@ Claude Code will automatically have access to these tools:
 | `message_bus_post` | Write to the message bus |
 | `conversation_search` | Search conversation history by keyword |
 | `memory_reindex` | Rebuild all embeddings (after switching providers) |
-| `cc_execute` | Submit a task for Claude Code |
-| `cc_check` | Check task status |
-| `cc_tasks` | List recent tasks |
+| `cc_execute` | Submit a task for Claude Code (supports multi-turn via `session_id`) |
+| `cc_check` | Check task status and get `session_id` for follow-ups |
+| `cc_tasks` | List recent tasks with session IDs |
+
+### Multi-turn task execution
+
+The task queue supports session resumption for multi-turn conversations with Claude Code:
+
+```
+1. cc_execute("set up the test database")     → task_id
+2. cc_check(task_id)                           → result + session_id
+3. cc_execute("now run the migrations", session_id="...")  → continues same CC session
+```
+
+Without `session_id`, each task starts a fresh Claude Code session with no prior context.
 
 ## Configuration
 

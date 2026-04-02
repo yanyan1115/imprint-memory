@@ -379,15 +379,27 @@ def search(query: str, limit: int = 10, category: Optional[str] = None) -> list[
 
 
 def search_text(query: str, limit: int = 10) -> str:
-    """Search and return formatted text."""
+    """Search and return formatted text. Adds staleness warning for old memories."""
     results = search(query, limit)
     if not results:
         return "No matching memories found"
     lines = []
+    now = now_local()
     for r in results:
         score = f"{r['final_score']:.2f}"
         created = r.get('created_at', '')
-        lines.append(f"[{r['category']}|{r['source']}|{created}] (relevance:{score}) {r['content'][:200]}")
+        line = f"[{r['category']}|{r['source']}|{created}] (relevance:{score}) {r['content'][:200]}"
+        # Staleness warning for old memories
+        if created:
+            try:
+                from datetime import datetime
+                created_dt = datetime.strptime(created[:10], "%Y-%m-%d")
+                days_old = (now.replace(tzinfo=None) - created_dt).days
+                if days_old > 14:
+                    line += f"\n  ⚠ {days_old}天前的记忆，涉及代码/配置/状态请先验证再使用"
+            except (ValueError, TypeError):
+                pass
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -525,10 +537,69 @@ def find_stale(days: int = 14) -> list[dict]:
         SELECT id, content, category, importance, recalled_count, created_at
         FROM memories
         WHERE created_at < ? AND importance < 7 AND recalled_count < 3
+            AND superseded_by IS NULL
         ORDER BY created_at ASC
     """, (cutoff,)).fetchall()
     db.close()
     return [dict(r) for r in rows]
+
+
+def decay(days: int = 30, dry_run: bool = True) -> dict:
+    """Decay importance of inactive memories. Memories older than `days` with
+    recalled_count < 2 get importance decremented by 1 (minimum 0).
+    Memories that reach importance=0 are marked as archived (superseded_by=-1).
+    Returns summary of what was (or would be) changed.
+
+    dry_run=True: preview only (default). dry_run=False: apply changes."""
+    db = _get_db()
+    cutoff = (now_local() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+    now = now_str()
+
+    # Find candidates: old, rarely recalled, not already superseded/archived
+    rows = db.execute("""
+        SELECT id, content, category, importance, recalled_count, created_at
+        FROM memories
+        WHERE updated_at < ? AND recalled_count < 2
+            AND superseded_by IS NULL AND importance > 0
+        ORDER BY importance ASC, created_at ASC
+    """, (cutoff,)).fetchall()
+
+    decayed = []
+    archived = []
+    for r in rows:
+        new_imp = r["importance"] - 1
+        entry = {"id": r["id"], "category": r["category"],
+                 "content": r["content"][:100],
+                 "importance": f"{r['importance']} → {new_imp}"}
+        if new_imp <= 0:
+            archived.append(entry)
+            if not dry_run:
+                db.execute(
+                    "UPDATE memories SET importance = 0, superseded_by = -1, updated_at = ? WHERE id = ?",
+                    (now, r["id"]),
+                )
+        else:
+            decayed.append(entry)
+            if not dry_run:
+                db.execute(
+                    "UPDATE memories SET importance = ?, updated_at = ? WHERE id = ?",
+                    (new_imp, now, r["id"]),
+                )
+
+    if not dry_run:
+        db.commit()
+    db.close()
+
+    if not dry_run:
+        _rebuild_index()
+
+    return {
+        "dry_run": dry_run,
+        "decayed": len(decayed),
+        "archived": len(archived),
+        "details_decayed": decayed[:20],
+        "details_archived": archived[:20],
+    }
 
 
 # ─── Memory Context ──────────────────────────────────────
