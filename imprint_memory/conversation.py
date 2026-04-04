@@ -3,7 +3,7 @@ Conversation log — Layer 3 of the memory architecture.
 Stores full conversation history from all platforms with FTS5 search.
 """
 
-from .db import _get_db, now_str, LOCAL_TZ
+from .db import _get_db, now_str, LOCAL_TZ, segment_cjk, sanitize_fts_query
 from datetime import datetime
 
 
@@ -88,14 +88,12 @@ def search_conversations(
 
 
 def _sanitize_fts_query(query: str) -> str:
-    """Sanitize a query string for FTS5 MATCH.
-    Removes operators and special characters that could cause parse errors."""
-    import re
-    # Strip FTS5 operators and special characters
-    cleaned = re.sub(r'["\(\)\*\:\^\{\}]', ' ', query)
-    # Collapse whitespace
-    cleaned = ' '.join(cleaned.split())
-    return cleaned.strip()
+    """Sanitize and segment a query string for FTS5 MATCH.
+    Uses shared sanitize_fts_query + segment_cjk from db.py."""
+    cleaned = sanitize_fts_query(query)
+    if not cleaned:
+        return ""
+    return segment_cjk(cleaned)
 
 
 def get_recent(platform: str = "", exclude_platforms: list = None, limit: int = 30) -> list[dict]:

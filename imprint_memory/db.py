@@ -42,6 +42,18 @@ except ImportError:
     _JIEBA_OK = False
 
 
+def sanitize_fts_query(query: str) -> str:
+    """Sanitize a query string for FTS5 MATCH.
+    Removes operators and special characters that could cause parse errors."""
+    # Strip FTS5 operators and special characters
+    cleaned = re.sub(r'["\(\)\*\:\^\{\}]', ' ', query)
+    # Remove FTS5 boolean keywords when used as operators
+    cleaned = re.sub(r'\b(AND|OR|NOT|NEAR)\b', ' ', cleaned)
+    # Collapse whitespace
+    cleaned = ' '.join(cleaned.split())
+    return cleaned.strip()
+
+
 def segment_cjk(text: str) -> str:
     """Segment CJK text for FTS5 indexing.
     With jieba: word-level ("喜欢攀岩" → "喜欢 攀岩")
@@ -207,6 +219,16 @@ def _init_tables(db: sqlite3.Connection):
     except sqlite3.OperationalError:
         pass
 
+    # Drop old triggers so corrected versions (with segment_cjk on delete side) are created
+    db.executescript("""
+        DROP TRIGGER IF EXISTS memories_ai;
+        DROP TRIGGER IF EXISTS memories_ad;
+        DROP TRIGGER IF EXISTS memories_au;
+        DROP TRIGGER IF EXISTS convlog_ai;
+        DROP TRIGGER IF EXISTS convlog_ad;
+        DROP TRIGGER IF EXISTS convlog_au;
+    """)
+
     # FTS5 sync triggers (segment_cjk for CJK language support)
     db.executescript("""
         CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
@@ -215,11 +237,11 @@ def _init_tables(db: sqlite3.Connection):
         END;
         CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
             INSERT INTO memories_fts(memories_fts, rowid, content, category, tags)
-            VALUES ('delete', old.id, old.content, old.category, old.tags);
+            VALUES ('delete', old.id, segment_cjk(old.content), old.category, old.tags);
         END;
         CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
             INSERT INTO memories_fts(memories_fts, rowid, content, category, tags)
-            VALUES ('delete', old.id, old.content, old.category, old.tags);
+            VALUES ('delete', old.id, segment_cjk(old.content), old.category, old.tags);
             INSERT INTO memories_fts(rowid, content, category, tags)
             VALUES (new.id, segment_cjk(new.content), new.category, new.tags);
         END;
@@ -230,7 +252,13 @@ def _init_tables(db: sqlite3.Connection):
         END;
         CREATE TRIGGER IF NOT EXISTS convlog_ad AFTER DELETE ON conversation_log BEGIN
             INSERT INTO conversation_log_fts(conversation_log_fts, rowid, content, platform, speaker)
-            VALUES ('delete', old.id, old.content, old.platform, old.speaker);
+            VALUES ('delete', old.id, segment_cjk(old.content), old.platform, old.speaker);
+        END;
+        CREATE TRIGGER IF NOT EXISTS convlog_au AFTER UPDATE ON conversation_log BEGIN
+            INSERT INTO conversation_log_fts(conversation_log_fts, rowid, content, platform, speaker)
+            VALUES ('delete', old.id, segment_cjk(old.content), old.platform, old.speaker);
+            INSERT INTO conversation_log_fts(rowid, content, platform, speaker)
+            VALUES (new.id, segment_cjk(new.content), new.platform, new.speaker);
         END;
     """)
     db.commit()

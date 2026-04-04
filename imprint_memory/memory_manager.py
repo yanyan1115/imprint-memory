@@ -15,6 +15,7 @@ from typing import Optional
 from .db import (
     _get_db, now_local, now_str,
     DAILY_LOG_DIR, BANK_DIR, MEMORY_INDEX, LOCAL_TZ,
+    segment_cjk, sanitize_fts_query,
 )
 
 # ─── Embedding Config ────────────────────────────────────
@@ -287,7 +288,9 @@ def search(query: str, limit: int = 10, category: Optional[str] = None) -> list[
 
     # 1. FTS5 keyword search
     try:
-        fts_query = query.replace('"', '""')
+        fts_query = segment_cjk(sanitize_fts_query(query))
+        if not fts_query:
+            fts_query = query.replace('"', '""')
         cat_filter = "AND m.category = ?" if category else ""
         params = [fts_query, category] if category else [fts_query]
         fts_rows = db.execute(f"""
