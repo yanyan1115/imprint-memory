@@ -190,6 +190,22 @@ def conversation_search(query: str, platform: str = "", limit: int = 20) -> str:
     return format_search_results(results)
 
 
+@mcp.tool()
+def search_telegram(query: str, limit: int = 20) -> str:
+    """Search Telegram conversations — includes Telegram channel chats and heartbeat notifications.
+    Matches what you'd find by searching in the Telegram app."""
+    results = search_conversations(query=query, platforms=["telegram", "heartbeat"], limit=limit)
+    return format_search_results(results)
+
+
+@mcp.tool()
+def search_wechat(query: str, limit: int = 20) -> str:
+    """Search WeChat conversations — includes all WeChat channel chats.
+    Matches what you'd find by searching in WeChat."""
+    results = search_conversations(query=query, platforms=["wechat"], limit=limit)
+    return format_search_results(results)
+
+
 # --- CC Task Tools ----------------------------------------------------
 
 @mcp.tool()

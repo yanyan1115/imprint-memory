@@ -37,16 +37,30 @@ def log_message(
 
 
 def search_conversations(
-    query: str, platform: str = "", limit: int = 20
+    query: str, platform: str = "", platforms: list[str] | None = None, limit: int = 20
 ) -> list[dict]:
-    """FTS5 keyword search over conversation history."""
+    """FTS5 keyword search over conversation history.
+    platform: single platform filter (legacy)
+    platforms: list of platforms to include (e.g. ["telegram", "heartbeat"])
+    """
     db = _get_db()
     try:
-        # Sanitize query for FTS5: strip special chars that could cause parse errors
         safe_query = _sanitize_fts_query(query)
         if not safe_query:
             return []
-        if platform:
+
+        if platforms:
+            placeholders = ",".join("?" for _ in platforms)
+            rows = db.execute(
+                f"""SELECT c.id, c.platform, c.direction, c.speaker, c.content,
+                          c.session_id, c.entrypoint, c.created_at
+                   FROM conversation_log_fts f
+                   JOIN conversation_log c ON c.id = f.rowid
+                   WHERE conversation_log_fts MATCH ? AND c.platform IN ({placeholders})
+                   ORDER BY c.id DESC LIMIT ?""",
+                (safe_query, *platforms, limit),
+            ).fetchall()
+        elif platform:
             rows = db.execute(
                 """SELECT c.id, c.platform, c.direction, c.speaker, c.content,
                           c.session_id, c.entrypoint, c.created_at
@@ -68,7 +82,6 @@ def search_conversations(
             ).fetchall()
         return [dict(r) for r in rows]
     except Exception:
-        # FTS5 MATCH can still fail on unusual input; fall back to empty results
         return []
     finally:
         db.close()

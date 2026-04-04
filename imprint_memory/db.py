@@ -4,6 +4,7 @@ All imprint-memory modules import _get_db() from here.
 """
 
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -25,6 +26,34 @@ BANK_DIR = DATA_DIR / "memory" / "bank"
 MEMORY_INDEX = DATA_DIR / "MEMORY.md"
 
 
+
+# --- CJK Segmentation (for FTS5 triggers) --------------------------------
+
+_CJK_RE = re.compile(
+    r'([\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df'
+    r'\U0002a700-\U0002ebef\u3000-\u303f\uff00-\uffef])'
+)
+
+try:
+    import jieba as _jieba
+    _jieba.setLogLevel(20)
+    _JIEBA_OK = True
+except ImportError:
+    _JIEBA_OK = False
+
+
+def segment_cjk(text: str) -> str:
+    """Segment CJK text for FTS5 indexing.
+    With jieba: word-level ("喜欢攀岩" → "喜欢 攀岩")
+    Without:    char-level fallback ("喜欢攀岩" → "喜 欢 攀 岩")
+    """
+    if not text:
+        return text or ""
+    if _JIEBA_OK:
+        return " ".join(_jieba.cut_for_search(text))
+    return re.sub(r'\s+', ' ', _CJK_RE.sub(r' \1 ', text)).strip()
+
+
 def _get_db() -> sqlite3.Connection:
     """Get database connection, auto-create tables."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -32,6 +61,7 @@ def _get_db() -> sqlite3.Connection:
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA busy_timeout=5000")
     db.row_factory = sqlite3.Row
+    db.create_function("segment_cjk", 1, segment_cjk)
     _init_tables(db)
     return db
 
@@ -177,11 +207,11 @@ def _init_tables(db: sqlite3.Connection):
     except sqlite3.OperationalError:
         pass
 
-    # FTS5 sync triggers
+    # FTS5 sync triggers (segment_cjk for CJK language support)
     db.executescript("""
         CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
             INSERT INTO memories_fts(rowid, content, category, tags)
-            VALUES (new.id, new.content, new.category, new.tags);
+            VALUES (new.id, segment_cjk(new.content), new.category, new.tags);
         END;
         CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
             INSERT INTO memories_fts(memories_fts, rowid, content, category, tags)
@@ -191,12 +221,12 @@ def _init_tables(db: sqlite3.Connection):
             INSERT INTO memories_fts(memories_fts, rowid, content, category, tags)
             VALUES ('delete', old.id, old.content, old.category, old.tags);
             INSERT INTO memories_fts(rowid, content, category, tags)
-            VALUES (new.id, new.content, new.category, new.tags);
+            VALUES (new.id, segment_cjk(new.content), new.category, new.tags);
         END;
 
         CREATE TRIGGER IF NOT EXISTS convlog_ai AFTER INSERT ON conversation_log BEGIN
             INSERT INTO conversation_log_fts(rowid, content, platform, speaker)
-            VALUES (new.id, new.content, new.platform, new.speaker);
+            VALUES (new.id, segment_cjk(new.content), new.platform, new.speaker);
         END;
         CREATE TRIGGER IF NOT EXISTS convlog_ad AFTER DELETE ON conversation_log BEGIN
             INSERT INTO conversation_log_fts(conversation_log_fts, rowid, content, platform, speaker)
