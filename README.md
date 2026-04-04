@@ -115,9 +115,11 @@ OAuth credentials via `~/.imprint-oauth.json` or env vars (`OAUTH_CLIENT_ID`, `O
     └── bank/           # Knowledge files (.md)
 ```
 
-## Part of Claude Imprint
+## Standalone vs Full Stack
 
-This is the memory module from [claude-imprint](https://github.com/Qizhan7/claude-imprint). Works standalone or as part of the full stack.
+**This package works on its own** — `pip install` and you get persistent memory in Claude Code. No other dependencies.
+
+If you also want multi-channel messaging (Telegram, WeChat), Claude.ai integration, heartbeat automation, a dashboard, and scheduled tasks, see the full system: [claude-imprint](https://github.com/Qizhan7/claude-imprint). It installs imprint-memory as a dependency.
 
 ## License
 
