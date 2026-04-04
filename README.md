@@ -2,235 +2,122 @@
 
 Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Gives Claude long-term memory that survives across conversations.
 
-Built as an [MCP server](https://modelcontextprotocol.io/) — works with Claude Code locally (stdio) or remotely via HTTP with OAuth.
+Built as an [MCP server](https://modelcontextprotocol.io/) — works locally (stdio) or remotely via HTTP with OAuth.
 
-## What it does
+## Features
 
-- **Memory CRUD** — store, search, list, and delete memories
-- **Hybrid search** — FTS5 keyword search + bge-m3 vector embeddings + time decay scoring
-- **Daily logs** — append-only daily journal files
-- **Message bus** — shared message log across sources
-- **Task queue** — submit tasks for Claude Code to execute asynchronously
-- **Bank files** — auto-indexes markdown files in a `bank/` directory for semantic search
+- **Hybrid search** — FTS5 full-text + vector embeddings + exact-match, fused with [RRF](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) ranking and time-decay scoring
+- **CJK support** — Chinese/Japanese/Korean text is segmented with jieba for accurate full-text search
+- **Memory CRUD** — store, search, update, delete memories with category/source/importance tags
+- **Conversation search** — search logged conversations by keyword, filterable by platform
+- **Knowledge bank** — drop `.md` files in `bank/`; they're auto-chunked, embedded, and searchable
+- **Daily logs** — append-only daily journal
+- **Message bus** — shared timeline across all sources
+- **Task queue** — submit tasks for Claude Code to execute asynchronously (supports multi-turn sessions)
+- **Context compression** — summarize old context lines with a local Ollama model, with truncation fallback
 
-All data stored in a single SQLite database with WAL mode for concurrent access.
+All data in a single SQLite database (WAL mode).
 
 ## Quick start
 
-### 1. Install
-
 ```bash
+# Install
 pip install git+https://github.com/Qizhan7/imprint-memory.git
+
+# Register with Claude Code
+claude mcp add -s user imprint-memory -- imprint-memory
 ```
 
-Or clone and install locally:
+Or clone locally:
 
 ```bash
 git clone https://github.com/Qizhan7/imprint-memory.git
-cd imprint-memory
-pip install -e .
+cd imprint-memory && pip install -e .
 ```
 
-### 2. Register with Claude Code
-
-Add to your project's `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "imprint-memory": {
-      "command": "imprint-memory"
-    }
-  }
-}
-```
-
-Or run directly:
-
-```json
-{
-  "mcpServers": {
-    "imprint-memory": {
-      "command": "python3",
-      "args": ["/path/to/imprint-memory/imprint_memory/server.py"]
-    }
-  }
-}
-```
-
-### 3. Use
-
-Claude Code will automatically have access to these tools:
+## Tools
 
 | Tool | Description |
 |------|-------------|
-| `memory_remember` | Store a memory (with category, source, importance) |
+| `memory_remember` | Store a memory (category, source, importance) |
 | `memory_search` | Hybrid search across all memories |
-| `memory_forget` | Delete memories by keyword |
 | `memory_list` | List recent memories |
-| `memory_daily_log` | Append to today's log |
-| `message_bus_read` | Read recent message bus history |
-| `message_bus_post` | Write to the message bus |
-| `conversation_search` | Search conversation history by keyword |
+| `memory_update` | Update a memory by ID |
+| `memory_delete` | Delete a memory by ID |
+| `memory_forget` | Delete memories matching a keyword |
+| `memory_find_duplicates` | Find semantically similar pairs (dedup audit) |
+| `memory_find_stale` | Find low-activity old memories |
+| `memory_decay` | Reduce importance of inactive memories (dry-run by default) |
 | `memory_reindex` | Rebuild all embeddings (after switching providers) |
-| `cc_execute` | Submit a task for Claude Code (supports multi-turn via `session_id`) |
-| `cc_check` | Check task status and get `session_id` for follow-ups |
-| `cc_tasks` | List recent tasks with session IDs |
-
-### Multi-turn task execution
-
-The task queue supports session resumption for multi-turn conversations with Claude Code:
-
-```
-1. cc_execute("set up the test database")     → task_id
-2. cc_check(task_id)                           → result + session_id
-3. cc_execute("now run the migrations", session_id="...")  → continues same CC session
-```
-
-Without `session_id`, each task starts a fresh Claude Code session with no prior context.
+| `memory_daily_log` | Append to today's log |
+| `conversation_search` | Search conversation history (all platforms) |
+| `search_telegram` | Search Telegram + heartbeat conversations |
+| `search_wechat` | Search WeChat conversations |
+| `message_bus_read` / `post` | Read/write the shared message bus |
+| `cc_execute` | Submit a task for Claude Code |
+| `cc_check` / `cc_tasks` | Check task status, list recent tasks |
 
 ## Configuration
 
-All configuration via environment variables:
+All via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `IMPRINT_DATA_DIR` | `~/.imprint/` | Base directory for all data |
 | `IMPRINT_DB` | `$IMPRINT_DATA_DIR/memory.db` | SQLite database path |
-| `TZ_OFFSET` | `0` | Hours offset from UTC (e.g., `12` for NZST) |
-| `EMBED_PROVIDER` | `ollama` | Embedding provider: `ollama` or `openai` |
-| `EMBED_MODEL` | auto | Model name (defaults: `bge-m3` for ollama, `text-embedding-3-small` for openai) |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `OPENAI_API_KEY` | — | API key for OpenAI-compatible providers |
+| `TZ_OFFSET` | `0` | Hours offset from UTC (e.g. `12` for NZST) |
+| `EMBED_PROVIDER` | `ollama` | `ollama` or `openai` |
+| `EMBED_MODEL` | auto | Model name (default: `bge-m3` / `text-embedding-3-small`) |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint |
+| `OPENAI_API_KEY` | — | For OpenAI-compatible providers |
 | `EMBED_API_BASE` | `https://api.openai.com` | Base URL for OpenAI-compatible API |
-| `MESSAGE_BUS_LIMIT` | `40` | Max messages in the bus (rolling window) |
 
 ### Embedding providers
 
-**Option A: Ollama (local, default)** — Free, private, requires local GPU/CPU.
-
+**Ollama (default)** — free, local:
 ```bash
-ollama pull bge-m3
-ollama serve
+ollama pull bge-m3 && ollama serve
 ```
 
-**Option B: OpenAI API** — No local GPU needed, pay-per-use.
-
+**OpenAI API** — no local GPU:
 ```bash
-export EMBED_PROVIDER=openai
-export OPENAI_API_KEY=sk-...
+export EMBED_PROVIDER=openai OPENAI_API_KEY=sk-...
 ```
 
-**Option C: Any OpenAI-compatible API** — Works with Voyage AI, Azure OpenAI, Google Gemini, etc.
-
+**Any OpenAI-compatible API** (Voyage AI, Azure, etc.):
 ```bash
-export EMBED_PROVIDER=openai
-export OPENAI_API_KEY=your-api-key
-export EMBED_API_BASE=https://your-provider.com  # e.g., https://api.voyageai.com
-export EMBED_MODEL=your-model-name               # e.g., voyage-3-lite
+export EMBED_PROVIDER=openai OPENAI_API_KEY=... EMBED_API_BASE=https://... EMBED_MODEL=...
 ```
 
-**No embedding provider?** The system falls back to FTS5 keyword search only — still functional, just less semantic.
+No embedding provider? Falls back to FTS5 keyword search only — still works, just less semantic.
 
-**Switching providers:** After switching, run the `memory_reindex` tool to rebuild embeddings with the new provider.
+After switching providers, run `memory_reindex` to rebuild embeddings.
 
-### Bank files
+## HTTP mode
 
-Put markdown files in `$IMPRINT_DATA_DIR/memory/bank/` and they'll be automatically chunked, embedded, and included in search results. Useful for storing structured knowledge (preferences, relationships, experiences).
-
-## HTTP mode (remote access)
-
-For use with Claude.ai through a tunnel:
+For Claude.ai access through a tunnel:
 
 ```bash
-imprint-memory --http
-# or
 pip install imprint-memory[http]
-imprint-memory --http
+imprint-memory --http   # → http://0.0.0.0:8000/mcp
 ```
 
-Serves on `http://0.0.0.0:8000/mcp` with OAuth 2.0 support.
+OAuth credentials via `~/.imprint-oauth.json` or env vars (`OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_ACCESS_TOKEN`).
 
-Configure OAuth credentials via `~/.imprint-oauth.json`:
-
-```json
-{
-  "client_id": "your-client-id",
-  "client_secret": "your-client-secret",
-  "access_token": "your-access-token"
-}
-```
-
-Or via environment variables: `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_ACCESS_TOKEN`.
-
-### Cloud server deployment
-
-Run imprint-memory on a cloud server for 24/7 access:
-
-```bash
-# 1. Install on your server
-pip install git+https://github.com/Qizhan7/imprint-memory.git[http]
-
-# 2. Set up embedding (choose one)
-export EMBED_PROVIDER=openai
-export OPENAI_API_KEY=sk-...
-# Or skip for keyword-only search
-
-# 3. Start HTTP server
-imprint-memory --http
-# Listens on 0.0.0.0:8000
-
-# 4. Expose via Cloudflare Tunnel (recommended) or Nginx + HTTPS
-cloudflared tunnel --url http://localhost:8000
-```
-
-Then in Claude Code on your local machine, add the remote MCP server URL.
-
-## Data storage
+## Data layout
 
 ```
 ~/.imprint/
-├── memory.db          # SQLite database (memories, vectors, tasks, bus)
-├── MEMORY.md          # Auto-generated memory index
+├── memory.db           # SQLite (memories, vectors, tasks, bus)
+├── MEMORY.md           # Auto-generated index
 └── memory/
-    ├── 2026-03-29.md  # Daily log files
-    └── bank/
-        ├── experience.md
-        └── preferences.md
+    ├── 2026-04-01.md   # Daily logs
+    └── bank/           # Knowledge files (.md)
 ```
-
-## Console
-
-Check system status at a glance:
-
-```bash
-imprint-console            # status + live log
-imprint-console --status   # status snapshot only
-```
-
-Shows: database stats, Ollama status, data files, HTTP server status.
-
-## Context compression (optional)
-
-If you maintain a rolling context file (e.g. `recent_context.md`), you can compress older messages with a local Ollama model:
-
-```bash
-python3 -m imprint_memory.compress /path/to/recent_context.md
-```
-
-Configure via environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `COMPRESS_MODEL` | `qwen3:8b` | Ollama model for summarization |
-| `COMPRESS_KEEP` | `30` | Recent lines to keep as-is |
-| `COMPRESS_THRESHOLD` | `50` | Line count that triggers compression |
-
-If Ollama is unavailable, falls back to truncation (keeps only the most recent lines).
 
 ## Part of Claude Imprint
 
-This is the core memory module extracted from [claude-imprint](https://github.com/Qizhan7/claude-imprint), a self-hosted AI agent system. It works standalone or as part of the full imprint stack.
+This is the memory module from [claude-imprint](https://github.com/Qizhan7/claude-imprint). Works standalone or as part of the full stack.
 
 ## License
 
