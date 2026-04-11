@@ -130,7 +130,7 @@ def get_recent(platform: str = "", exclude_platforms: list = None, limit: int = 
 def format_recent(messages: list[dict], max_content_len: int = 300) -> str:
     """Format recent messages for recent_context.md.
     Uses pre-computed summary if available; falls back to truncation."""
-    platform_short = {"telegram": "tg", "wechat": "wx", "cc": "cc", "heartbeat": "hb"}
+    platform_short = {"telegram": "tg", "cc": "cc", "heartbeat": "hb"}
     lines = []
     for m in messages:
         p = platform_short.get(m["platform"], m["platform"])
