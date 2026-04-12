@@ -1317,6 +1317,16 @@ def unified_search(
             r["score"] = r["score"] / max_score if max_score > 0 else 0
         results.extend(items)
 
+    # Keyword presence boost: results containing query terms get a bonus.
+    # This prevents semantically vague matches from outranking exact keyword hits.
+    _KEYWORD_BOOST = 0.3
+    query_terms = query.split() if " " in query else [query]
+    for r in results:
+        content = r.get("content", "")
+        matched = sum(1 for t in query_terms if t in content)
+        if matched:
+            r["score"] += _KEYWORD_BOOST * (matched / len(query_terms))
+
     results.sort(key=lambda x: x["score"], reverse=True)
     results = results[:limit]
 
