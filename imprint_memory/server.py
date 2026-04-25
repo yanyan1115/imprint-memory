@@ -54,11 +54,12 @@ def memory_remember(content: str, category: str = "general", source: str = "cc",
 
 
 @mcp.tool()
-def memory_search(query: str, limit: int = 10) -> str:
+def memory_search(query: str, limit: int = 10, after: Optional[str] = None, before: Optional[str] = None) -> str:
     """Search across all memory pools (memories, knowledge bank, conversations) using RRF fusion.
     Combines FTS5 keyword, vector semantic, and exact-match channels with per-pool reranking.
-    Falls back to keyword-only if no embedding provider is configured."""
-    return unified_search_text(query=query, limit=limit)
+    Falls back to keyword-only if no embedding provider is configured.
+    after/before: ISO date strings to filter by time range (e.g. '2026-04-01' or '2026-04-01T10:00:00')."""
+    return unified_search_text(query=query, limit=limit, after=after, before=before)
 
 
 @mcp.tool()
@@ -74,9 +75,10 @@ def memory_daily_log(text: str) -> str:
 
 
 @mcp.tool()
-def memory_list(category: Optional[str] = None, limit: int = 20) -> str:
-    """List memories (newest first)."""
-    items = get_all(category=category, limit=limit)
+def memory_list(category: Optional[str] = None, limit: int = 20, after: Optional[str] = None, before: Optional[str] = None) -> str:
+    """List memories (newest first).
+    after/before: ISO date strings to filter by time range (e.g. '2026-04-01' or '2026-04-01T10:00:00')."""
+    items = get_all(category=category, limit=limit, after=after, before=before)
     if not items:
         return "No memories yet"
     lines = []
@@ -331,6 +333,20 @@ def cc_tasks(limit: int = 5) -> str:
         sid = f" sid={t['session_id'][:8]}..." if t.get("session_id") else ""
         lines.append(f"[{icon}] #{t['task_id']} [{t['status']}]{sid} {t['prompt']}")
     return "\n".join(lines)
+
+
+@mcp.tool()
+def experience_append(title: str, content: str) -> str:
+    """Append a new experience entry to memory/bank/experience.md.
+    title: section heading (e.g. 'Port conflict debugging')
+    content: markdown body (bullet points recommended)"""
+    exp_path = Path(os.environ.get("IMPRINT_DATA_DIR", ".")) / "memory" / "bank" / "experience.md"
+    if not exp_path.exists():
+        exp_path.parent.mkdir(parents=True, exist_ok=True)
+        exp_path.write_text("# Experience Log\n")
+    with open(exp_path, "a") as f:
+        f.write(f"\n## {title}\n{content}\n")
+    return f"Added experience: {title}"
 
 
 # --- HTTP Mode with OAuth ---------------------------------------------

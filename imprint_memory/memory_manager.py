@@ -410,13 +410,25 @@ def search_text(query: str, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
-def get_all(category: Optional[str] = None, limit: int = 50) -> list[dict]:
-    """Get all active memories (by time desc). Excludes superseded memories."""
+def get_all(category: Optional[str] = None, limit: int = 50, after: Optional[str] = None, before: Optional[str] = None) -> list[dict]:
+    """Get all active memories (by time desc). Excludes superseded memories.
+    after: ISO date string, only memories created on or after this date (e.g. '2026-04-01').
+    before: ISO date string, only memories created on or before this date."""
     db = _get_db()
-    cat_filter = "AND category = ?" if category else ""
-    params = (category,) if category else ()
+    filters = []
+    params: list = []
+    if category:
+        filters.append("AND category = ?")
+        params.append(category)
+    if after:
+        filters.append("AND created_at >= ?")
+        params.append(after)
+    if before:
+        filters.append("AND created_at <= ?")
+        params.append(before)
+    filter_sql = " ".join(filters)
     rows = db.execute(
-        f"SELECT * FROM memories WHERE superseded_by IS NULL {cat_filter} ORDER BY created_at DESC LIMIT ?",
+        f"SELECT * FROM memories WHERE superseded_by IS NULL {filter_sql} ORDER BY created_at DESC LIMIT ?",
         (*params, limit),
     ).fetchall()
     db.close()
@@ -671,12 +683,19 @@ def _clean_bank_chunk(chunk: str) -> Optional[str]:
     return cleaned
 
 
+_BANK_EXCLUDE = set(
+    f.strip() for f in os.environ.get("IMPRINT_BANK_EXCLUDE", "").split(",") if f.strip()
+)
+
 def _index_bank_files():
     """Index markdown files in bank/ directory. Skip unchanged files."""
     if not BANK_DIR.exists():
         return
     db = _get_db()
     for md_file in BANK_DIR.glob("*.md"):
+        if md_file.name in _BANK_EXCLUDE:
+            continue
+        md_file = md_file.resolve()
         mtime = md_file.stat().st_mtime
         existing = db.execute(
             "SELECT file_mtime, index_version FROM bank_chunks WHERE file_path = ? LIMIT 1",
@@ -1233,6 +1252,8 @@ def unified_search(
     pools: list[str] | None = None,
     category: str | None = None,
     platform: str = "",
+    after: str | None = None,
+    before: str | None = None,
     _internal: bool = False,
 ) -> list[dict]:
     """Search across all memory pools with RRF fusion and per-pool reranking.
@@ -1243,6 +1264,7 @@ def unified_search(
         pools:    subset of ["memory", "bank", "conversation"]; None = all
         category: filter memory pool by category
         platform: filter conversation pool by platform
+        after/before: ISO date strings to filter by time range
         _internal: skip side-effects (recalled_count, last_accessed_at) — for edge expansion
 
     Returns list of dicts sorted by final score, each containing:
@@ -1250,6 +1272,9 @@ def unified_search(
     """
     if pools is None:
         pools = ["memory", "bank", "conversation"]
+
+    if (after or before) and "bank" in pools:
+        pools = [p for p in pools if p != "bank"]
 
     db = _get_db()
     query_vec = _embed(query)
@@ -1328,6 +1353,20 @@ def unified_search(
             r["score"] += _KEYWORD_BOOST * (matched / len(query_terms))
 
     results.sort(key=lambda x: x["score"], reverse=True)
+
+    # Time range filtering (after/before)
+    if after or before:
+        def _in_time_range(r):
+            ts = r.get("created_at", "")
+            if not ts:
+                return True
+            if after and ts < after:
+                return False
+            if before and ts > before:
+                return False
+            return True
+        results = [r for r in results if _in_time_range(r)]
+
     results = results[:limit]
 
     # Graph expansion: append edge-connected memories
@@ -1363,10 +1402,13 @@ def unified_search_text(
     limit: int = 10,
     pools: list[str] | None = None,
     platform: str = "",
+    after: str | None = None,
+    before: str | None = None,
 ) -> str:
     """Format unified search results as readable text.
-    Set IMPRINT_LOCALE=zh for Chinese labels, default English."""
-    results = unified_search(query, limit=limit, pools=pools, platform=platform)
+    Set IMPRINT_LOCALE=zh for Chinese labels, default English.
+    after/before: ISO date strings to filter by time range."""
+    results = unified_search(query, limit=limit, pools=pools, platform=platform, after=after, before=before)
     locale = os.environ.get("IMPRINT_LOCALE", "en")
     loc = _LOCALE_LABELS.get(locale, _LOCALE_LABELS["en"])
     if not results:
