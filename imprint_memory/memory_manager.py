@@ -1711,14 +1711,21 @@ def save_summary(content: str, turn_count: int = 0, platform: str = "unknown") -
     content = content.strip()[:1500]
     if not content:
         return {"error": "Empty summary content"}
+    platform = (platform or "unknown").strip() or "unknown"
+    try:
+        turn_count = max(int(turn_count), 0)
+    except (TypeError, ValueError):
+        turn_count = 0
     db = _get_db()
-    cursor = db.execute(
-        "INSERT INTO summaries (content, turn_count, platform, created_at) VALUES (?, ?, ?, ?)",
-        (content, turn_count, platform, now_str()),
-    )
-    db.commit()
-    summary_id = cursor.lastrowid
-    db.close()
+    try:
+        cursor = db.execute(
+            "INSERT INTO summaries (content, turn_count, platform, created_at) VALUES (?, ?, ?, ?)",
+            (content, turn_count, platform, now_str()),
+        )
+        db.commit()
+        summary_id = cursor.lastrowid
+    finally:
+        db.close()
     return {"id": summary_id, "status": "saved"}
 
 
@@ -1731,6 +1738,60 @@ def get_recent_summaries(limit: int = 3) -> list[dict]:
     ).fetchall()
     db.close()
     return [dict(r) for r in rows]
+
+
+def update_summary(
+    summary_id: int,
+    content: str,
+    turn_count: int = 0,
+    platform: str = "unknown",
+) -> dict:
+    """Update a conversation summary by ID. Truncates content to 1500 chars max."""
+    try:
+        summary_id = int(summary_id)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "invalid summary id"}
+
+    content = (content or "").strip()[:1500]
+    if not content:
+        return {"ok": False, "error": "content is required"}
+
+    platform = (platform or "unknown").strip() or "unknown"
+    try:
+        turn_count = max(int(turn_count), 0)
+    except (TypeError, ValueError):
+        turn_count = 0
+
+    db = _get_db()
+    try:
+        cursor = db.execute(
+            "UPDATE summaries SET content = ?, platform = ?, turn_count = ? WHERE id = ?",
+            (content, platform, turn_count, summary_id),
+        )
+        db.commit()
+        if cursor.rowcount == 0:
+            return {"ok": False, "error": "summary not found"}
+    finally:
+        db.close()
+    return {"ok": True}
+
+
+def delete_summary(summary_id: int) -> dict:
+    """Delete a conversation summary by ID."""
+    try:
+        summary_id = int(summary_id)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "invalid summary id"}
+
+    db = _get_db()
+    try:
+        cursor = db.execute("DELETE FROM summaries WHERE id = ?", (summary_id,))
+        db.commit()
+        if cursor.rowcount == 0:
+            return {"ok": False, "error": "summary not found"}
+    finally:
+        db.close()
+    return {"ok": True}
 
 
 def build_context(query: str = "") -> str:

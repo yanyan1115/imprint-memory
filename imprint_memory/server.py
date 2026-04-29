@@ -34,6 +34,8 @@ from .memory_manager import (
     get_relationship_snapshot as _get_relationship_snapshot,
     save_summary as _save_summary,
     get_recent_summaries as _get_recent_summaries,
+    update_summary as _update_summary,
+    delete_summary as _delete_summary,
     build_context as _build_context,
 )
 from .bus import bus_post, bus_format
@@ -270,6 +272,29 @@ def get_recent_summaries(limit: int = 3) -> str:
     for s in items:
         lines.append(f"[{s['created_at']}|{s['platform']}] ({s['turn_count']} turns)\n{s['content']}")
     return "\n---\n".join(lines)
+
+
+@mcp.tool()
+def update_summary(summary_id: int, content: str, turn_count: int = 0, platform: str = "unknown") -> str:
+    """Update a conversation summary by ID. Use after refining or correcting a saved summary."""
+    result = _update_summary(
+        summary_id=summary_id,
+        content=content,
+        turn_count=turn_count,
+        platform=platform,
+    )
+    if result.get("ok"):
+        return f"Updated summary #{summary_id}"
+    return f"Error: {result.get('error', 'update failed')}"
+
+
+@mcp.tool()
+def delete_summary(summary_id: int) -> str:
+    """Delete a conversation summary by ID."""
+    result = _delete_summary(summary_id=summary_id)
+    if result.get("ok"):
+        return f"Deleted summary #{summary_id}"
+    return f"Error: {result.get('error', 'delete failed')}"
 
 
 @mcp.tool()

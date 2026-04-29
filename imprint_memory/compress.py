@@ -115,6 +115,11 @@ def compress_file(context_file: Path, keep: int = 0, threshold: int = 0) -> bool
     return True
 
 
+def compress_context(context_file: str | Path, keep: int = 0, threshold: int = 0) -> bool:
+    """Backward-compatible alias for older callers."""
+    return compress_file(Path(context_file), keep=keep, threshold=threshold)
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 -m imprint_memory.compress <context_file>", file=sys.stderr)
