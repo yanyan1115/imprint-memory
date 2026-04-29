@@ -1732,3 +1732,66 @@ def get_recent_summaries(limit: int = 3) -> list[dict]:
     db.close()
     return [dict(r) for r in rows]
 
+
+def build_context(query: str = "") -> str:
+    """Build a full context document for conversation start.
+    Assembles up to five layers, skipping empty ones.
+    Total output capped at 3000 chars.
+    """
+    sections = []
+
+    # Layer 1: Continuity rules (always present)
+    sections.append(
+        "=== 连续性规则 ===\n"
+        "你正在继续一段持续的关系，不是第一次见面。请根据以下上下文自然地延续对话。"
+    )
+
+    # Layer 2: Relationship snapshot
+    snapshot = get_relationship_snapshot()
+    if not snapshot.startswith("No relationship snapshot"):
+        sections.append(f"=== 关系快照 ===\n{snapshot}")
+
+    # Layer 3: Recent summaries
+    summaries = get_recent_summaries(limit=3)
+    if summaries:
+        summary_lines = []
+        for s in summaries:
+            summary_lines.append(f"[{s['created_at']}] {s['content']}")
+        sections.append("=== 最近摘要 ===\n" + "\n".join(summary_lines))
+
+    # Layer 4: Surfacing memories
+    surfacing = get_surfacing_memories(limit=3)
+    if surfacing:
+        surf_lines = []
+        for m in surfacing:
+            surf_lines.append(
+                f"[#{m['id']}|arousal={m['arousal']:.1f}] {m['content'][:300]}"
+            )
+        sections.append("=== 主动浮现记忆 ===\n" + "\n".join(surf_lines))
+
+    # Layer 5: Relevant memories (only if query provided)
+    relevant_text = ""
+    if query.strip():
+        relevant_text = unified_search_text(query.strip(), limit=5)
+        if relevant_text and relevant_text not in ("No matching results found", "没有找到匹配的结果"):
+            sections.append(f"=== 相关记忆 ===\n{relevant_text}")
+
+    # If nothing beyond continuity rules
+    if len(sections) <= 1:
+        return "No context available yet. This appears to be a fresh start."
+
+    # Length control: cap at 3000 chars
+    result = "\n\n".join(sections)
+    if len(result) > 3000:
+        # Remove relevant memories first
+        sections = [s for s in sections if not s.startswith("=== 相关记忆")]
+        result = "\n\n".join(sections)
+    if len(result) > 3000:
+        # Then remove summaries
+        sections = [s for s in sections if not s.startswith("=== 最近摘要")]
+        result = "\n\n".join(sections)
+    if len(result) > 3000:
+        result = result[:2997] + "..."
+
+    return result
+

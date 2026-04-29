@@ -34,6 +34,7 @@ from .memory_manager import (
     get_relationship_snapshot as _get_relationship_snapshot,
     save_summary as _save_summary,
     get_recent_summaries as _get_recent_summaries,
+    build_context as _build_context,
 )
 from .bus import bus_post, bus_format
 from .tasks import submit_task, check_task, list_tasks
@@ -269,6 +270,12 @@ def get_recent_summaries(limit: int = 3) -> str:
     for s in items:
         lines.append(f"[{s['created_at']}|{s['platform']}] ({s['turn_count']} turns)\n{s['content']}")
     return "\n---\n".join(lines)
+
+
+@mcp.tool()
+def build_context(query: str = "") -> str:
+    """Build full context for conversation start. Includes relationship snapshot, summaries, surfacing memories, and relevant memories. Call once at the beginning of each conversation."""
+    return _build_context(query=query)
 
 
 # --- Pin / Tag / Edge Tools -------------------------------------------
