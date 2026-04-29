@@ -137,8 +137,31 @@ def datetime_strptime(s: str):
 
 # ─── Core API ────────────────────────────────────────────
 
+def _clamp01(value: float, default: float) -> float:
+    """Clamp a numeric score to the 0..1 range."""
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _decay_rate_for_category(category: str) -> float:
+    rates = {
+        "facts": 0.0,
+        "core": 0.0,
+        "core_profile": 0.0,
+        "tasks": 0.02,
+        "events": 0.05,
+        "experience": 0.10,
+        "general": 0.05,
+    }
+    return rates.get((category or "general").strip().lower(), 0.05)
+
+
 def remember(content: str, category: str = "general", source: str = "cc",
-             tags: Optional[list[str]] = None, importance: int = 5) -> str:
+             tags: Optional[list[str]] = None, importance: int = 5,
+             valence: float = 0.5, arousal: float = 0.3,
+             resolved: bool = True) -> str:
     """Store a memory with automatic dedup and conflict detection.
     - Exact duplicate content → skip
     - Semantic similarity ≥ 0.92 → skip (nearly identical)
@@ -179,12 +202,22 @@ def remember(content: str, category: str = "general", source: str = "cc",
                 supersede_ids.append((r["id"], r["content"][:40], sim))
 
     tags_json = json.dumps(tags or [], ensure_ascii=False)
+    valence = _clamp01(valence, 0.5)
+    arousal = _clamp01(arousal, 0.3)
+    resolved_int = 1 if resolved else 0
+    decay_rate = _decay_rate_for_category(category)
     now = now_str()
 
     cursor = db.execute(
-        """INSERT INTO memories (content, category, source, tags, importance, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (content, category, source, tags_json, importance, now),
+        """INSERT INTO memories (
+               content, category, source, tags, importance,
+               valence, arousal, resolved, decay_rate, created_at
+           )
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            content, category, source, tags_json, importance,
+            valence, arousal, resolved_int, decay_rate, now,
+        ),
     )
     memory_id = cursor.lastrowid
 
@@ -251,7 +284,13 @@ def delete_memory(memory_id: int) -> dict:
     return {"ok": True}
 
 
-def update_memory(memory_id: int, content: str = "", category: str = "", importance: int = 0) -> dict:
+def update_memory(
+    memory_id: int,
+    content: str = "",
+    category: str = "",
+    importance: int = 0,
+    resolved: int = -1,
+) -> dict:
     """Update a single memory by ID. Only non-empty/non-zero fields are changed."""
     db = _get_db()
     row = db.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
@@ -262,10 +301,22 @@ def update_memory(memory_id: int, content: str = "", category: str = "", importa
     new_content = content.strip() if content.strip() else row["content"]
     new_category = category.strip() if category.strip() else row["category"]
     new_importance = importance if importance > 0 else row["importance"]
+    new_resolved = row["resolved"] if resolved not in (0, 1) else resolved
+    new_decay_rate = (
+        _decay_rate_for_category(new_category)
+        if new_category != row["category"]
+        else row["decay_rate"]
+    )
 
     db.execute(
-        "UPDATE memories SET content = ?, category = ?, importance = ?, updated_at = ? WHERE id = ?",
-        (new_content, new_category, new_importance, now_str(), memory_id),
+        """UPDATE memories
+           SET content = ?, category = ?, importance = ?,
+               resolved = ?, decay_rate = ?, updated_at = ?
+           WHERE id = ?""",
+        (
+            new_content, new_category, new_importance,
+            new_resolved, new_decay_rate, now_str(), memory_id,
+        ),
     )
     # Only refresh embedding if content changed
     vec_refreshed = False
@@ -948,22 +999,28 @@ def _inject_default_ranks(
 # ─── Rerank Functions ───────────────────────────────────
 
 def _rerank_memory(rrf_score: float, row: dict) -> float:
-    """Memory rerank: time x activation x importance, blended with RRF."""
+    """Memory rerank: time x activation x importance x emotion, blended with RRF."""
     if row.get("pinned"):
         return rrf_score
 
     importance = max(row.get("importance", 5), 1)
     recalled = row.get("recalled_count", 0)
+    arousal = _clamp01(row.get("arousal", 0.3), 0.3)
+    resolved = bool(row.get("resolved", 1))
+    decay_rate = max(float(row.get("decay_rate", 0.05) or 0.0), 0.0)
 
     ref = row.get("last_accessed_at") or row.get("created_at", "")
     days = _days_since(ref, default=30)
-    lam = 0.05 / (importance / 5)
+    lam = decay_rate / (importance / 5) if decay_rate > 0 else 0.0
     time_factor = 0.4 + 0.6 * math.exp(-lam * days)
 
     activation_factor = 0.8 + 0.2 * (math.log(recalled + 1) / math.log(51))
     importance_factor = 0.7 + 0.3 * (importance / 10)
+    emotion_factor = 0.9 + 0.2 * arousal
+    if not resolved and arousal > 0.7:
+        emotion_factor *= 1.5
 
-    factor = time_factor * activation_factor * importance_factor
+    factor = time_factor * activation_factor * importance_factor * emotion_factor
     return rrf_score * (1 - RERANK_BLEND + RERANK_BLEND * factor)
 
 
@@ -1004,6 +1061,7 @@ def _search_memory_channels(query, query_vec, db, *, category=None, limit=50):
             params = [safe_q] + ([category] if category else []) + [limit]
             fts_rows = db.execute(
                 f"""SELECT m.id, m.content, m.category, m.source, m.importance,
+                           m.valence, m.arousal, m.resolved, m.decay_rate,
                            m.created_at, m.recalled_count,
                            m.last_accessed_at, m.pinned
                     FROM memories_fts f
@@ -1025,6 +1083,7 @@ def _search_memory_channels(query, query_vec, db, *, category=None, limit=50):
         params = [category] if category else []
         vec_rows = db.execute(
             f"""SELECT m.id, m.content, m.category, m.source, m.importance,
+                       m.valence, m.arousal, m.resolved, m.decay_rate,
                        m.created_at, m.recalled_count,
                        m.last_accessed_at, m.pinned,
                        v.embedding
@@ -1055,6 +1114,7 @@ def _search_memory_channels(query, query_vec, db, *, category=None, limit=50):
         params = [f"%{q_lower}%"] + ([category] if category else []) + [LIKE_LIMIT]
         like_rows = db.execute(
             f"""SELECT id, content, category, source, importance,
+                       valence, arousal, resolved, decay_rate,
                        created_at, recalled_count,
                        last_accessed_at, pinned
                 FROM memories

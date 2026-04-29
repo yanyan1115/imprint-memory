@@ -45,12 +45,27 @@ mcp = FastMCP(
 # --- Memory Tools -----------------------------------------------------
 
 @mcp.tool()
-def memory_remember(content: str, category: str = "general", source: str = "cc", importance: int = 5) -> str:
+def memory_remember(
+    content: str,
+    category: str = "general",
+    source: str = "cc",
+    importance: int = 5,
+    valence: float = 0.5,
+    arousal: float = 0.3,
+) -> str:
     """Store a memory. Call this when you encounter important information worth recalling in future conversations.
     category: facts/events/tasks/experience/general
     source: free-form label for where the info came from (e.g. cc, chat, api)
+    valence: 0..1 emotional valence (0=negative, 1=positive). arousal: 0..1 intensity (0=calm, 1=excited).
     DO NOT store: code patterns/file paths derivable from the codebase, git history, or info already in CLAUDE.md."""
-    return remember(content=content, category=category, source=source, importance=importance)
+    return remember(
+        content=content,
+        category=category,
+        source=source,
+        importance=importance,
+        valence=valence,
+        arousal=arousal,
+    )
 
 
 @mcp.tool()
@@ -97,10 +112,22 @@ def memory_delete(memory_id: int) -> str:
 
 
 @mcp.tool()
-def memory_update(memory_id: int, content: str = "", category: str = "", importance: int = 0) -> str:
+def memory_update(
+    memory_id: int,
+    content: str = "",
+    category: str = "",
+    importance: int = 0,
+    resolved: int = -1,
+) -> str:
     """Update a memory by ID. Only pass fields you want to change.
-    content: new content (empty = keep). category: new category (empty = keep). importance: new value (0 = keep)."""
-    result = update_memory(memory_id, content=content, category=category, importance=importance)
+    content: new content (empty = keep). category: new category (empty = keep). importance: new value (0 = keep). resolved: -1 = keep, 0/1 = update."""
+    result = update_memory(
+        memory_id,
+        content=content,
+        category=category,
+        importance=importance,
+        resolved=resolved,
+    )
     if result["ok"]:
         return f"Updated memory #{memory_id}"
     return f"Error: {result['error']}"

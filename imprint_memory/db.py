@@ -88,6 +88,10 @@ def _init_tables(db: sqlite3.Connection):
             source TEXT DEFAULT 'cc',
             tags TEXT DEFAULT '[]',
             importance INTEGER DEFAULT 5,
+            valence REAL DEFAULT 0.5,
+            arousal REAL DEFAULT 0.3,
+            resolved BOOLEAN DEFAULT 1,
+            decay_rate REAL DEFAULT 0.05,
             recalled_count INTEGER DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT,
@@ -198,6 +202,35 @@ def _init_tables(db: sqlite3.Connection):
     if "last_accessed_at" not in mem_cols:
         try:
             db.execute("ALTER TABLE memories ADD COLUMN last_accessed_at TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+    # Migration: add emotional memory columns
+    if "valence" not in mem_cols:
+        try:
+            db.execute("ALTER TABLE memories ADD COLUMN valence REAL DEFAULT 0.5")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+    if "arousal" not in mem_cols:
+        try:
+            db.execute("ALTER TABLE memories ADD COLUMN arousal REAL DEFAULT 0.3")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+    if "resolved" not in mem_cols:
+        try:
+            db.execute("ALTER TABLE memories ADD COLUMN resolved BOOLEAN DEFAULT 1")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+    if "decay_rate" not in mem_cols:
+        try:
+            db.execute("ALTER TABLE memories ADD COLUMN decay_rate REAL DEFAULT 0.05")
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e).lower():
                 raise
