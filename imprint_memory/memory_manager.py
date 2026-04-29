@@ -1705,3 +1705,30 @@ def get_relationship_snapshot() -> str:
     except FileNotFoundError:
         return "No relationship snapshot found. Create CLAUDE.md in ~/.imprint/ directory."
 
+
+def save_summary(content: str, turn_count: int = 0, platform: str = "unknown") -> dict:
+    """Save a conversation summary. Truncates to 1500 chars max."""
+    content = content.strip()[:1500]
+    if not content:
+        return {"error": "Empty summary content"}
+    db = _get_db()
+    cursor = db.execute(
+        "INSERT INTO summaries (content, turn_count, platform, created_at) VALUES (?, ?, ?, ?)",
+        (content, turn_count, platform, now_str()),
+    )
+    db.commit()
+    summary_id = cursor.lastrowid
+    db.close()
+    return {"id": summary_id, "status": "saved"}
+
+
+def get_recent_summaries(limit: int = 3) -> list[dict]:
+    """Get recent conversation summaries, newest first."""
+    db = _get_db()
+    rows = db.execute(
+        "SELECT id, content, turn_count, platform, created_at FROM summaries ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+

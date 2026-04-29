@@ -156,6 +156,14 @@ def _init_tables(db: sqlite3.Connection):
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT NOT NULL,
+            turn_count INTEGER DEFAULT 0,
+            platform TEXT DEFAULT 'unknown',
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS memory_tags (
             memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
             tag TEXT NOT NULL,

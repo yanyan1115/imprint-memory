@@ -32,6 +32,8 @@ from .memory_manager import (
     unified_search_text, pin_memory, unpin_memory,
     add_tags, get_tags, add_edge, get_edges, get_surfacing_memories,
     get_relationship_snapshot as _get_relationship_snapshot,
+    save_summary as _save_summary,
+    get_recent_summaries as _get_recent_summaries,
 )
 from .bus import bus_post, bus_format
 from .tasks import submit_task, check_task, list_tasks
@@ -246,6 +248,27 @@ def memory_surface(limit: int = 3) -> str:
 def get_relationship_snapshot() -> str:
     """Read relationship snapshot (CLAUDE.md). Call at conversation start for relationship context."""
     return _get_relationship_snapshot()
+
+
+@mcp.tool()
+def save_summary(content: str, turn_count: int = 0, platform: str = "unknown") -> str:
+    """Save a conversation summary for context continuity. Call when a conversation ends or gets long."""
+    result = _save_summary(content=content, turn_count=turn_count, platform=platform)
+    if "error" in result:
+        return f"Error: {result['error']}"
+    return f"Summary #{result['id']} saved ({len(content)} chars)"
+
+
+@mcp.tool()
+def get_recent_summaries(limit: int = 3) -> str:
+    """Get recent conversation summaries. Call at conversation start to restore previous context."""
+    items = _get_recent_summaries(limit=limit)
+    if not items:
+        return "No conversation summaries yet"
+    lines = []
+    for s in items:
+        lines.append(f"[{s['created_at']}|{s['platform']}] ({s['turn_count']} turns)\n{s['content']}")
+    return "\n---\n".join(lines)
 
 
 # --- Pin / Tag / Edge Tools -------------------------------------------
