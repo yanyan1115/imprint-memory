@@ -614,47 +614,80 @@ def find_stale(days: int = 14) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def decay(days: int = 30, dry_run: bool = True) -> dict:
-    """Decay importance of inactive memories. Memories older than `days` with
-    recalled_count < 2 get importance decremented by 1 (minimum 0).
-    Memories that reach importance=0 are marked as archived (superseded_by=-1).
-    Returns summary of what was (or would be) changed.
+def calculate_memory_score(memory: dict) -> float:
+    """Calculate memory activity score using an Ebbinghaus-style forgetting curve.
 
-    dry_run=True: preview only (default). dry_run=False: apply changes."""
+    Score = importance x (activation ^ 0.3) x e^(-lambda x days) x emotion_weight
+    """
+    importance = max(memory.get("importance", 5), 1) / 10.0
+    activation = max(memory.get("recalled_count", 0) + 1, 1)
+
+    ref = memory.get("last_accessed_at") or memory.get("created_at", "")
+    days = _days_since(ref, default=30)
+    raw_decay_rate = memory.get("decay_rate", 0.05)
+    decay_rate = 0.05 if raw_decay_rate is None else float(raw_decay_rate)
+
+    if decay_rate == 0:
+        time_decay = 1.0
+    else:
+        time_decay = math.exp(-decay_rate * days)
+
+    arousal = float(memory.get("arousal", 0.3) or 0.3)
+    base_emotion = 0.5
+    arousal_boost = 1.0
+    emotion_weight = base_emotion + arousal * arousal_boost
+
+    resolved = bool(memory.get("resolved", 1))
+    resolved_penalty = 1.0 if not resolved else 0.05
+    if arousal <= 0.7:
+        resolved_penalty = 1.0
+
+    score = importance * (activation ** 0.3) * time_decay * emotion_weight * resolved_penalty
+    return round(score, 4)
+
+
+def decay_memories(days: int = 30, dry_run: bool = True, threshold: float = 0.3) -> dict:
+    """Decay memories using the emotional forgetting curve.
+
+    Computes an activity score for each dynamic memory:
+    - Score >= threshold: keep active
+    - Score < threshold: archive by setting importance=0 and superseded_by=-1
+    - pinned memories and decay_rate=0 memories are skipped
+
+    dry_run=True: preview only. dry_run=False: apply archive changes.
+    """
     db = _get_db()
-    cutoff = (now_local() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
     now = now_str()
 
-    # Find candidates: old, rarely recalled, not already superseded/archived
     rows = db.execute("""
-        SELECT id, content, category, importance, recalled_count, created_at
+        SELECT id, content, category, importance, recalled_count,
+               created_at, last_accessed_at, valence, arousal, resolved,
+               decay_rate, pinned
         FROM memories
-        WHERE COALESCE(updated_at, created_at) < ? AND recalled_count < 2
-            AND superseded_by IS NULL AND importance > 0
-        ORDER BY importance ASC, created_at ASC
-    """, (cutoff,)).fetchall()
+        WHERE COALESCE(pinned, 0) = 0
+            AND COALESCE(decay_rate, 0.05) > 0
+            AND importance > 0
+            AND superseded_by IS NULL
+        ORDER BY created_at ASC
+    """).fetchall()
 
-    decayed = []
-    archived = []
+    archived: list[dict] = []
     for r in rows:
-        new_imp = r["importance"] - 1
+        memory = dict(r)
+        score = calculate_memory_score(memory)
+        if score >= threshold:
+            continue
+
         entry = {"id": r["id"], "category": r["category"],
                  "content": r["content"][:100],
-                 "importance": f"{r['importance']} → {new_imp}"}
-        if new_imp <= 0:
-            archived.append(entry)
-            if not dry_run:
-                db.execute(
-                    "UPDATE memories SET importance = 0, superseded_by = -1, updated_at = ? WHERE id = ?",
-                    (now, r["id"]),
-                )
-        else:
-            decayed.append(entry)
-            if not dry_run:
-                db.execute(
-                    "UPDATE memories SET importance = ?, updated_at = ? WHERE id = ?",
-                    (new_imp, now, r["id"]),
-                )
+                 "importance": f"{r['importance']} -> 0",
+                 "score": score}
+        archived.append(entry)
+        if not dry_run:
+            db.execute(
+                "UPDATE memories SET importance = 0, superseded_by = -1, updated_at = ? WHERE id = ?",
+                (now, r["id"]),
+            )
 
     if not dry_run:
         db.commit()
@@ -665,11 +698,36 @@ def decay(days: int = 30, dry_run: bool = True) -> dict:
 
     return {
         "dry_run": dry_run,
-        "decayed": len(decayed),
+        "scanned": len(rows),
+        "threshold": threshold,
+        "decayed": 0,
         "archived": len(archived),
-        "details_decayed": decayed[:20],
+        "details_decayed": [],
         "details_archived": archived[:20],
     }
+
+
+def decay(days: int = 30, dry_run: bool = True, threshold: float = 0.3) -> dict:
+    """Backward-compatible wrapper for the Phase 3 emotional decay engine."""
+    return decay_memories(days=days, dry_run=dry_run, threshold=threshold)
+
+
+def get_surfacing_memories(arousal_threshold: float = 0.7, limit: int = 3) -> list[dict]:
+    """Get unresolved high-arousal memories that should be proactively surfaced."""
+    db = _get_db()
+    rows = db.execute("""
+        SELECT id, content, category, arousal, valence, created_at
+        FROM memories
+        WHERE resolved = 0
+            AND arousal > ?
+            AND importance > 0
+            AND COALESCE(pinned, 0) = 0
+            AND superseded_by IS NULL
+        ORDER BY arousal DESC, created_at DESC
+        LIMIT ?
+    """, (arousal_threshold, limit)).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
 
 
 # ─── Memory Context ──────────────────────────────────────

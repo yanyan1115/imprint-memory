@@ -13,6 +13,9 @@ Or if installed:
 """
 
 import sys
+import logging
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -24,10 +27,10 @@ if __name__ == "__main__" or not __package__:
 from mcp.server.fastmcp import FastMCP
 from .memory_manager import (
     remember, search_text, forget, daily_log, get_all,
-    delete_memory, update_memory, find_duplicates, find_stale, decay,
+    delete_memory, update_memory, find_duplicates, find_stale, decay_memories,
     reindex_embeddings,
     unified_search_text, pin_memory, unpin_memory,
-    add_tags, get_tags, add_edge, get_edges,
+    add_tags, get_tags, add_edge, get_edges, get_surfacing_memories,
 )
 from .bus import bus_post, bus_format
 from .tasks import submit_task, check_task, list_tasks
@@ -40,6 +43,30 @@ mcp = FastMCP(
     host="0.0.0.0" if is_http else "127.0.0.1",
     port=8000,
 )
+
+logger = logging.getLogger(__name__)
+_decay_thread_started = False
+
+
+def _decay_background_loop():
+    time.sleep(300)
+    while True:
+        try:
+            result = decay_memories(dry_run=False, threshold=0.3)
+            logger.info("Decay cycle completed: %s", result)
+        except Exception as e:
+            logger.error("Decay cycle failed: %s", e)
+        time.sleep(86400)
+
+
+def _start_decay_background_thread():
+    global _decay_thread_started
+    if _decay_thread_started:
+        return
+    decay_thread = threading.Thread(target=_decay_background_loop, daemon=True)
+    decay_thread.start()
+    _decay_thread_started = True
+    logger.info("Started background decay thread")
 
 
 # --- Memory Tools -----------------------------------------------------
@@ -174,12 +201,14 @@ def memory_find_stale(days: int = 14) -> str:
 
 @mcp.tool()
 def memory_decay(days: int = 30, dry_run: bool = True) -> str:
-    """Decay importance of inactive memories. Memories not recalled for `days` days
-    get importance -1. Reaches 0 → archived (hidden from search).
+    """Archive inactive memories using the emotional forgetting curve.
     dry_run=True (default): preview only. dry_run=False: apply changes."""
-    result = decay(days=days, dry_run=dry_run)
+    result = decay_memories(days=days, dry_run=dry_run)
     mode = "DRY RUN" if result["dry_run"] else "APPLIED"
-    lines = [f"[{mode}] Decayed: {result['decayed']}, Archived: {result['archived']}"]
+    lines = [
+        f"[{mode}] Scanned: {result.get('scanned', 0)}, "
+        f"Threshold: {result.get('threshold', 0.3)}, Archived: {result['archived']}"
+    ]
     if result["details_decayed"]:
         lines.append("\nDecayed:")
         for d in result["details_decayed"]:
@@ -187,9 +216,28 @@ def memory_decay(days: int = 30, dry_run: bool = True) -> str:
     if result["details_archived"]:
         lines.append("\nArchived (importance → 0):")
         for a in result["details_archived"]:
-            lines.append(f"  #{a['id']} [{a['category']}] {a['importance']} — {a['content']}")
+            lines.append(f"  #{a['id']} [{a['category']}] score={a['score']:.4f} {a['importance']} — {a['content']}")
     if not result["details_decayed"] and not result["details_archived"]:
         lines.append("No memories need decay at this time.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def memory_surface(limit: int = 3) -> str:
+    """Get unresolved high-arousal memories that should be surfaced.
+    These are memories marked as unresolved (resolved=0) with high emotional intensity (arousal > 0.7).
+    Returns up to `limit` memories, sorted by arousal descending."""
+    items = get_surfacing_memories(limit=limit)
+    if not items:
+        return "No unresolved high-arousal memories to surface"
+    lines = [f"Found {len(items)} memories to surface:\n"]
+    for m_item in items:
+        lines.append(
+            f"  #{m_item['id']} [{m_item['category']}] "
+            f"arousal={m_item['arousal']:.2f} valence={m_item['valence']:.2f} "
+            f"({m_item['created_at']})\n"
+            f"    {m_item['content'][:500]}"
+        )
     return "\n".join(lines)
 
 
@@ -523,6 +571,8 @@ def _run_http():
 
 def main():
     """Entry point for console script and direct execution."""
+    logging.basicConfig(level=logging.INFO)
+    _start_decay_background_thread()
     if is_http:
         _run_http()
     else:
