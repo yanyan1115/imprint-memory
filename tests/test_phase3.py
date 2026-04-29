@@ -141,6 +141,14 @@ class Phase3Tests(unittest.TestCase):
         self.assertEqual(core["importance"], 2)
         self.assertIsNone(core["superseded_by"])
 
+    def test_decay_memories_runs_without_candidates(self):
+        result = mm.decay_memories(dry_run=False, threshold=0.3)
+
+        self.assertFalse(result["dry_run"])
+        self.assertEqual(result["scanned"], 0)
+        self.assertEqual(result["archived"], 0)
+        self.assertEqual(result["details_archived"], [])
+
     def test_get_surfacing_memories_filters_and_orders(self):
         mm.remember("phase3 surface me", arousal=0.9, resolved=False)
         mm.remember("phase3 already resolved", arousal=0.9, resolved=True)
