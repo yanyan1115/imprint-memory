@@ -446,7 +446,7 @@ def search_text(query: str, limit: int = 10) -> str:
     for r in results:
         score = f"{r['final_score']:.2f}"
         created = r.get('created_at', '')
-        line = f"[{r['category']}|{r['source']}|{created}] (relevance:{score}) {r['content'][:500]}"
+        line = f"[{r['category']}|{r['source']}|{created}] (relevance:{score}) {r['content'][:1000]}"
         # Staleness warning for old memories
         if created:
             try:
@@ -1480,7 +1480,7 @@ def unified_search_text(
     for r in results:
         label = _labels.get(r["pool"], r["pool"])
         score = f"{r['score']:.4f}"
-        content = r.get("content", "")[:500]
+        content = r.get("content", "")[:1000]
 
         if r["pool"] == "memory":
             cat = r.get("category", "")
