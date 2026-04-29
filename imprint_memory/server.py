@@ -31,6 +31,7 @@ from .memory_manager import (
     reindex_embeddings,
     unified_search_text, pin_memory, unpin_memory,
     add_tags, get_tags, add_edge, get_edges, get_surfacing_memories,
+    get_relationship_snapshot as _get_relationship_snapshot,
 )
 from .bus import bus_post, bus_format
 from .tasks import submit_task, check_task, list_tasks
@@ -239,6 +240,12 @@ def memory_surface(limit: int = 3) -> str:
             f"    {m_item['content'][:500]}"
         )
     return "\n".join(lines)
+
+
+@mcp.tool()
+def get_relationship_snapshot() -> str:
+    """Read relationship snapshot (CLAUDE.md). Call at conversation start for relationship context."""
+    return _get_relationship_snapshot()
 
 
 # --- Pin / Tag / Edge Tools -------------------------------------------

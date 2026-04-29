@@ -17,7 +17,7 @@ from typing import Optional
 
 from .db import (
     _get_db, now_local, now_str,
-    DAILY_LOG_DIR, BANK_DIR, MEMORY_INDEX, LOCAL_TZ,
+    DATA_DIR, DAILY_LOG_DIR, BANK_DIR, MEMORY_INDEX, LOCAL_TZ,
     segment_cjk, sanitize_fts_query,
     _CJK_RE, _JIEBA_OK,
 )
@@ -1696,4 +1696,12 @@ def get_edges(memory_id: int) -> list[dict]:
     db.close()
     return edges
 
+
+def get_relationship_snapshot() -> str:
+    """Read CLAUDE.md relationship snapshot from data directory."""
+    snapshot_path = DATA_DIR / "CLAUDE.md"
+    try:
+        return snapshot_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return "No relationship snapshot found. Create CLAUDE.md in ~/.imprint/ directory."
 
