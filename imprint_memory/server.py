@@ -185,8 +185,8 @@ def memory_find_duplicates(threshold: float = 0.85) -> str:
 
 @mcp.tool()
 def memory_reindex() -> str:
-    """Rebuild all memory embeddings with the current provider.
-    Use after switching embedding providers (e.g., from Ollama to OpenAI)."""
+    """Rebuild recoverable retrieval indexes.
+    Covers memory_vectors, memories_fts, conversation_log_fts, and bank_chunks."""
     return reindex_embeddings()
 
 

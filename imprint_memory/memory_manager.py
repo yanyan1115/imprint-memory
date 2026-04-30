@@ -17,7 +17,7 @@ from typing import Optional
 
 from .db import (
     _get_db, now_local, now_str,
-    DATA_DIR, DAILY_LOG_DIR, BANK_DIR, MEMORY_INDEX, LOCAL_TZ,
+    DATA_DIR, DB_PATH, DAILY_LOG_DIR, BANK_DIR, MEMORY_INDEX, LOCAL_TZ,
     segment_cjk, sanitize_fts_query,
     _CJK_RE, _JIEBA_OK,
 )
@@ -573,13 +573,41 @@ def find_duplicates(threshold: float = 0.85) -> list[dict]:
     return pairs
 
 
-def reindex_embeddings() -> str:
-    """Rebuild all memory embeddings using the current provider.
-    Useful after switching embedding providers (e.g., ollama → openai)."""
-    db = _get_db()
+def _format_reindex_report(result: dict) -> str:
+    """Format reindex status for MCP users and logs."""
+    lines = [
+        f"memory_reindex completed: {result['status']}",
+        f"Database: {result['database']}",
+        f"Provider: {result['provider']}, model: {result['model']}",
+        f"Started: {result['started_at']}",
+        f"Finished: {result['finished_at']}",
+    ]
+    for item in result["targets"]:
+        if item["target"] == "memory_vectors":
+            lines.append(
+                "- memory_vectors: {status}, rebuilt {rebuilt}/{total} memories, "
+                "{failed} failed".format(**item)
+            )
+        elif item["target"] in {"memories_fts", "conversation_log_fts"}:
+            lines.append(
+                f"- {item['target']}: {item['status']}, rebuilt {item['rebuilt']} rows"
+            )
+        elif item["target"] == "bank_chunks":
+            lines.append(
+                "- bank_chunks: {status}, cleared {cleared} rows, indexed {files_indexed} "
+                "files, wrote {chunks_written} chunks, skipped {files_skipped} files".format(**item)
+            )
+        else:
+            lines.append(f"- {item['target']}: {item['status']}")
+        if item.get("error"):
+            lines.append(f"  error: {item['error']}")
+    return "\n".join(lines)
+
+
+def _rebuild_memory_vectors(db: sqlite3.Connection) -> dict:
     rows = db.execute("SELECT id, content FROM memories").fetchall()
     total = len(rows)
-    updated = 0
+    rebuilt = 0
     failed = 0
 
     for r in rows:
@@ -590,13 +618,168 @@ def reindex_embeddings() -> str:
                 "INSERT INTO memory_vectors (memory_id, embedding, model) VALUES (?, ?, ?)",
                 (r["id"], _vec_to_blob(vec), EMBED_MODEL),
             )
-            updated += 1
+            rebuilt += 1
         else:
             failed += 1
 
-    db.commit()
-    db.close()
-    return f"Reindexed {updated}/{total} memories ({failed} failed). Provider: {EMBED_PROVIDER}, model: {EMBED_MODEL}"
+    return {
+        "target": "memory_vectors",
+        "status": "ok",
+        "total": total,
+        "rebuilt": rebuilt,
+        "failed": failed,
+    }
+
+
+def _rebuild_fts_table(
+    db: sqlite3.Connection,
+    *,
+    target: str,
+    source_table: str,
+    columns: tuple[str, ...],
+) -> dict:
+    column_sql = ", ".join(columns)
+    db.execute(f"DROP TABLE IF EXISTS {target}")
+    db.execute(
+        f"""CREATE VIRTUAL TABLE {target}
+            USING fts5({column_sql}, content={source_table}, content_rowid=id)"""
+    )
+    rows = db.execute(
+        f"SELECT id, {column_sql} FROM {source_table} ORDER BY id"
+    ).fetchall()
+    for row in rows:
+        values = [segment_cjk(row[columns[0]] or "")]
+        values.extend(row[col] or "" for col in columns[1:])
+        placeholders = ", ".join("?" for _ in columns)
+        db.execute(
+            f"INSERT INTO {target}(rowid, {column_sql}) VALUES (?, {placeholders})",
+            (row["id"], *values),
+        )
+    return {
+        "target": target,
+        "status": "ok",
+        "rebuilt": len(rows),
+    }
+
+
+def _rebuild_bank_chunks(db: sqlite3.Connection) -> dict:
+    cleared = db.execute("SELECT COUNT(*) AS c FROM bank_chunks").fetchone()["c"]
+    db.execute("DELETE FROM bank_chunks")
+
+    files_indexed = 0
+    files_skipped = 0
+    chunks_written = 0
+
+    if not BANK_DIR.exists():
+        return {
+            "target": "bank_chunks",
+            "status": "ok",
+            "cleared": cleared,
+            "files_indexed": 0,
+            "files_skipped": 0,
+            "chunks_written": 0,
+        }
+
+    for md_file in BANK_DIR.glob("*.md"):
+        if md_file.name in _BANK_EXCLUDE:
+            files_skipped += 1
+            continue
+        md_file = md_file.resolve()
+        mtime = md_file.stat().st_mtime
+        text = md_file.read_text(encoding="utf-8")
+        chunks = _split_into_chunks(text)
+        wrote_for_file = 0
+
+        for chunk in chunks:
+            cleaned_chunk = _clean_bank_chunk(chunk)
+            if not cleaned_chunk or len(cleaned_chunk) < 10:
+                continue
+            vec = _embed(cleaned_chunk)
+            blob = _vec_to_blob(vec) if vec else None
+            db.execute(
+                """INSERT INTO bank_chunks
+                   (file_path, chunk_text, embedding, file_mtime, index_version)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (str(md_file), cleaned_chunk, blob, mtime, BANK_INDEX_VERSION),
+            )
+            chunks_written += 1
+            wrote_for_file += 1
+
+        if wrote_for_file:
+            files_indexed += 1
+        else:
+            files_skipped += 1
+
+    return {
+        "target": "bank_chunks",
+        "status": "ok",
+        "cleared": cleared,
+        "files_indexed": files_indexed,
+        "files_skipped": files_skipped,
+        "chunks_written": chunks_written,
+    }
+
+
+def reindex_all() -> dict:
+    """Rebuild derived retrieval indexes and return structured status."""
+    started = now_str()
+    db = _get_db()
+    targets = []
+
+    rebuild_steps = [
+        ("memory_vectors", lambda: _rebuild_memory_vectors(db)),
+        (
+            "memories_fts",
+            lambda: _rebuild_fts_table(
+                db,
+                target="memories_fts",
+                source_table="memories",
+                columns=("content", "category", "tags"),
+            ),
+        ),
+        (
+            "conversation_log_fts",
+            lambda: _rebuild_fts_table(
+                db,
+                target="conversation_log_fts",
+                source_table="conversation_log",
+                columns=("content", "platform", "speaker"),
+            ),
+        ),
+        ("bank_chunks", lambda: _rebuild_bank_chunks(db)),
+    ]
+
+    try:
+        for target, step in rebuild_steps:
+            try:
+                targets.append(step())
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                targets.append({
+                    "target": target,
+                    "status": "error",
+                    "error": str(exc),
+                })
+    finally:
+        db.close()
+
+    status = "success" if all(t["status"] == "ok" for t in targets) else "partial_failure"
+    return {
+        "status": status,
+        "database": str(DB_PATH),
+        "provider": EMBED_PROVIDER,
+        "model": EMBED_MODEL,
+        "started_at": started,
+        "finished_at": now_str(),
+        "targets": targets,
+    }
+
+
+def reindex_embeddings() -> str:
+    """Rebuild all recoverable retrieval indexes.
+    Useful after switching embedding providers or repairing FTS/bank indexes."""
+    return _format_reindex_report(reindex_all())
 
 
 def find_stale(days: int = 14) -> list[dict]:
