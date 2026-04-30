@@ -1,129 +1,196 @@
-# imprint-memory
+# MemoClover
 
-Persistent memory system for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Gives Claude long-term memory that survives across conversations.
+MemoClover is a standalone long-term memory core for Claude. It gives Claude Code and other MCP clients a durable memory layer backed by SQLite, hybrid retrieval, daily logs, a knowledge bank, conversation search, a message bus, and a small task queue.
 
-Built as an [MCP server](https://modelcontextprotocol.io/) — works locally (stdio) or remotely via HTTP with OAuth.
+It can run by itself as a local MCP server, or as the memory engine inside the larger [Claude Imprint](https://github.com/Qizhan7/claude-imprint) framework.
 
-## Features
+## What It Does
 
-- **Hybrid search** — FTS5 full-text + vector embeddings + exact-match, fused with [RRF](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf) ranking and time-decay scoring
-- **CJK support** — Chinese/Japanese/Korean text is segmented with jieba for accurate full-text search
-- **Memory CRUD** — store, search, update, delete memories with category/source/importance tags
-- **Conversation search** — search logged conversations by keyword, filterable by platform
-- **Knowledge bank** — drop `.md` files in `bank/`; they're auto-chunked, embedded, and searchable
-- **Daily logs** — append-only daily journal
-- **Message bus** — shared timeline across all sources
-- **Task queue** — submit tasks for Claude Code to execute asynchronously (supports multi-turn sessions)
-- **Context compression** — summarize old context lines with a local Ollama model, with truncation fallback
+- Stores durable memories with category, source, importance, emotion, tags, and graph edges.
+- Searches across memories, Markdown bank files, and conversation logs with FTS5, vector retrieval, exact matching, and RRF fusion.
+- Supports Chinese/Japanese/Korean search through CJK segmentation for FTS5.
+- Keeps daily logs and an auto-generated `MEMORY.md` index.
+- Provides conversation search for multi-channel history.
+- Exposes a message bus for cross-service coordination.
+- Queues Claude Code tasks for asynchronous execution.
+- Runs in stdio mode for Claude Code or HTTP mode for Claude.ai connector deployments.
 
-All data in a single SQLite database (WAL mode).
+All state lives in one SQLite database with WAL enabled. MemoClover is designed to stay simple enough for a small personal server while still giving Claude a serious retrieval backbone.
 
-## Quick start
+## Installation
 
-```bash
-# Install
-pip install git+https://github.com/Qizhan7/imprint-memory.git
-
-# Register with Claude Code
-claude mcp add -s user imprint-memory -- imprint-memory
-```
-
-Or clone locally:
+Install from GitHub:
 
 ```bash
-git clone https://github.com/Qizhan7/imprint-memory.git
-cd imprint-memory && pip install -e .
+pip install git+https://github.com/Qizhan7/MemoClover.git
 ```
 
-## Tools
+Or clone and install locally:
 
-| Tool | Description |
-|------|-------------|
-| `memory_remember` | Store a memory (category, source, importance) |
-| `memory_search` | **RRF unified search** across memories, bank, and conversations |
-| `memory_list` | List recent memories |
-| `memory_update` | Update a memory by ID |
-| `memory_delete` | Delete a memory by ID |
-| `memory_forget` | Delete memories matching a keyword |
-| `memory_pin` / `memory_unpin` | Pin/unpin core memories (pinned = no time-decay) |
-| `memory_add_tags` | Add tags to a memory (comma-separated) |
-| `memory_add_edge` | Link two memories with a typed relationship |
-| `memory_get_graph` | View a memory's tags, edges, and neighbor previews |
-| `memory_find_duplicates` | Find semantically similar pairs (dedup audit) |
-| `memory_find_stale` | Find low-activity old memories |
-| `memory_decay` | Reduce importance of inactive memories (dry-run by default) |
-| `memory_reindex` | Rebuild all embeddings (after switching providers) |
-| `memory_daily_log` | Append to today's log |
-| `conversation_search` | Search conversation history (all platforms) |
-| `search_telegram` | Search Telegram + heartbeat conversations |
-| `search_channel` | Search any specific channel (discord, slack, etc.) |
-| `message_bus_read` / `post` | Read/write the shared message bus |
-| `cc_execute` | Submit a task for Claude Code |
-| `cc_check` / `cc_tasks` | Check task status, list recent tasks |
+```bash
+git clone https://github.com/Qizhan7/MemoClover.git
+cd MemoClover
+pip install -e .
+```
+
+For HTTP mode, include the optional dependencies:
+
+```bash
+pip install "memo-clover[http]"
+```
+
+## Claude Code MCP Setup
+
+Register MemoClover as a user-level MCP server:
+
+```bash
+claude mcp add -s user memo-clover -- memo-clover
+```
+
+The server can also be launched directly:
+
+```bash
+memo-clover
+```
+
+## HTTP Mode
+
+Run the MCP server over HTTP for tunnel or connector deployments:
+
+```bash
+memo-clover --http
+```
+
+The HTTP endpoint listens on:
+
+```text
+http://0.0.0.0:8000/mcp
+```
+
+OAuth credentials are read from `~/.imprint-oauth.json` first, then from environment variables:
+
+- `OAUTH_CLIENT_ID`
+- `OAUTH_CLIENT_SECRET`
+- `OAUTH_ACCESS_TOKEN`
+
+The `~/.imprint-oauth.json` filename is kept for compatibility with existing Claude Imprint deployments.
+
+## MCP Tools
+
+| Tool | Purpose |
+|---|---|
+| `memory_remember` | Store a memory with category, source, importance, valence, and arousal. |
+| `memory_search` | Search memories, knowledge bank chunks, and conversation logs with unified retrieval. |
+| `memory_list` | List recent active memories. |
+| `memory_update` | Update memory content and metadata by ID. |
+| `memory_delete` | Delete a single memory by ID. |
+| `memory_forget` | Delete memories containing a keyword. |
+| `memory_pin` / `memory_unpin` | Protect or unprotect memories from time decay. |
+| `memory_add_tags` | Add structured tags to a memory. |
+| `memory_add_edge` | Link two memories with a typed relationship. |
+| `memory_get_graph` | Inspect tags, edges, and neighboring memories. |
+| `memory_find_duplicates` | Audit semantically similar memory pairs. |
+| `memory_find_stale` | Find old or low-activity memories. |
+| `memory_decay` | Apply emotional time-decay logic, dry-run by default. |
+| `memory_reindex` | Rebuild vectors, FTS tables, and knowledge bank chunks. |
+| `memory_daily_log` | Append text to the current daily log. |
+| `conversation_search` | Search conversation history. |
+| `search_telegram` | Search Telegram and heartbeat conversations. |
+| `search_channel` | Search any named conversation channel. |
+| `message_bus_read` / `message_bus_post` | Read and write the shared message bus. |
+| `cc_execute` | Submit a Claude Code task. |
+| `cc_check` / `cc_tasks` | Check or list queued tasks. |
 
 ## Configuration
 
-All via environment variables:
+MemoClover intentionally keeps the existing `IMPRINT_*` environment variables for backward compatibility. Existing Claude Imprint users can upgrade without moving their data directory.
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `IMPRINT_DATA_DIR` | `~/.imprint/` | Base directory for all data |
-| `IMPRINT_DB` | `$IMPRINT_DATA_DIR/memory.db` | SQLite database path |
-| `TZ_OFFSET` | `0` | Hours offset from UTC (e.g. `12` for NZST) |
-| `EMBED_PROVIDER` | `ollama` | `ollama` or `openai` |
-| `EMBED_MODEL` | auto | Model name (default: `bge-m3` / `text-embedding-3-small`) |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint |
-| `OPENAI_API_KEY` | — | For OpenAI-compatible providers |
-| `EMBED_API_BASE` | `https://api.openai.com` | Base URL for OpenAI-compatible API |
+|---|---|---|
+| `IMPRINT_DATA_DIR` | `~/.imprint` | Base directory for database, logs, generated index, and bank files. |
+| `IMPRINT_DB` | `$IMPRINT_DATA_DIR/memory.db` | Explicit SQLite database path. |
+| `TZ_OFFSET` | `0` | Fixed UTC hour offset used by timestamps. |
+| `EMBED_PROVIDER` | `ollama` | Embedding provider, usually `ollama` or `openai`. |
+| `EMBED_MODEL` | provider default | Embedding model name. |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint. |
+| `OPENAI_API_KEY` | empty | API key for OpenAI-compatible embeddings. |
+| `EMBED_API_BASE` | `https://api.openai.com` | Base URL for OpenAI-compatible embedding APIs. |
+| `IMPRINT_LOCALE` | `en` | Search result labels; use `zh` for Chinese labels. |
+| `IMPRINT_BANK_EXCLUDE` | empty | Comma-separated Markdown bank filenames to skip. |
 
-### Embedding providers
+## Embeddings
 
-**Ollama (default)** — free, local:
-```bash
-ollama pull bge-m3 && ollama serve
-```
-
-**OpenAI API** — no local GPU:
-```bash
-export EMBED_PROVIDER=openai OPENAI_API_KEY=sk-...
-```
-
-**Any OpenAI-compatible API** (Voyage AI, Azure, etc.):
-```bash
-export EMBED_PROVIDER=openai OPENAI_API_KEY=... EMBED_API_BASE=https://... EMBED_MODEL=...
-```
-
-No embedding provider? Falls back to FTS5 keyword search only — still works, just less semantic.
-
-After switching providers, run `memory_reindex` to rebuild embeddings.
-
-## HTTP mode
-
-For Claude.ai access through a tunnel:
+By default, MemoClover calls Ollama and expects a local embedding model such as `bge-m3`:
 
 ```bash
-pip install imprint-memory[http]
-imprint-memory --http   # → http://0.0.0.0:8000/mcp
+ollama pull bge-m3
+ollama serve
 ```
 
-OAuth credentials via `~/.imprint-oauth.json` or env vars (`OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_ACCESS_TOKEN`).
+For OpenAI-compatible embeddings:
 
-## Data layout
-
+```bash
+export EMBED_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
+export EMBED_MODEL=text-embedding-3-small
 ```
+
+After changing embedding providers or models, call `memory_reindex` to rebuild vector rows and derived search indexes.
+
+If no embedding provider is available, MemoClover falls back to keyword search. Memory remains usable, just less semantic.
+
+## Data Layout
+
+```text
 ~/.imprint/
-├── memory.db           # SQLite (memories, vectors, tasks, bus)
-├── MEMORY.md           # Auto-generated index
-└── memory/
-    ├── 2026-04-01.md   # Daily logs
-    └── bank/           # Knowledge files (.md)
+|-- memory.db
+|-- MEMORY.md
+|-- recent_context.md
+`-- memory/
+    |-- YYYY-MM-DD.md
+    `-- bank/
+        |-- experience.md
+        `-- *.md
 ```
 
-## Standalone vs Full Stack
+The `.imprint` directory name is a compatibility promise. MemoClover owns the memory engine; Claude Imprint and other shells can share the same data root.
 
-**This package works on its own** — `pip install` and you get persistent memory in Claude Code. No other dependencies.
+## Development
 
-If you also want multi-channel messaging (Telegram, etc.), Claude.ai integration, heartbeat automation, a dashboard, and scheduled tasks, see the full system: [claude-imprint](https://github.com/Qizhan7/claude-imprint). It installs imprint-memory as a dependency.
+Run the core test suite:
+
+```bash
+python -m pytest -q
+```
+
+Run the server as a module while developing:
+
+```bash
+python -m memo_clover.server
+python -m memo_clover.server --http
+```
+
+Inspect local status with:
+
+```bash
+memo-clover-console --status
+```
+
+## Relationship To Claude Imprint
+
+MemoClover is the core memory package. It owns the Python API, MCP tools, SQLite schema, indexing, retrieval, summaries, decay logic, and task queue.
+
+Claude Imprint is the full-stack orchestration framework around it. It adds Dashboard, hooks, deployment templates, cron tasks, Telegram utilities, heartbeat automation, Cloudflare Tunnel guidance, and integration tests.
+
+Use MemoClover alone when you want a compact memory engine. Use Claude Imprint when you want the full operating shell.
+
+## Credits
+
+MemoClover was shaped and implemented with help from:
+
+- Anthropic Claude Code
+- OpenAI ChatGPT Codex
+- Google Gemini
 
 ## License
 

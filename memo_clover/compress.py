@@ -7,7 +7,7 @@ Designed to keep a rolling context file (e.g. recent_context.md) from growing
 unbounded by summarizing older messages with a local LLM.
 
 Usage:
-    python3 -m imprint_memory.compress /path/to/recent_context.md
+    python3 -m memo_clover.compress /path/to/recent_context.md
 
 Environment variables:
     OLLAMA_URL       — Ollama API endpoint (default: http://localhost:11434)
@@ -122,7 +122,7 @@ def compress_context(context_file: str | Path, keep: int = 0, threshold: int = 0
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 -m imprint_memory.compress <context_file>", file=sys.stderr)
+        print("Usage: python3 -m memo_clover.compress <context_file>", file=sys.stderr)
         sys.exit(1)
     compress_file(Path(sys.argv[1]))
 

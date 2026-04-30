@@ -1,5 +1,5 @@
 """
-Claude Imprint — Memory System
+MemoClover — Memory System
 Pure memory operations: CRUD, hybrid search (FTS5 + bge-m3), bank indexing, daily log.
 Includes RRF unified retrieval across memory, bank, and conversation pools.
 """

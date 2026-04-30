@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-imprint-memory -- MCP Server
+memo-clover -- MCP Server
 Persistent memory system: CRUD, hybrid search, message bus, task queue.
 
 Usage:
-  python3 -m imprint_memory.server          # stdio mode (for Claude Code)
-  python3 -m imprint_memory.server --http   # HTTP mode (for Claude.ai via tunnel)
+  python3 -m memo_clover.server          # stdio mode (for Claude Code)
+  python3 -m memo_clover.server --http   # HTTP mode (for Claude.ai via tunnel)
 
 Or if installed:
-  imprint-memory          # stdio mode
-  imprint-memory --http   # HTTP mode
+  memo-clover          # stdio mode
+  memo-clover --http   # HTTP mode
 """
 
 import sys
@@ -22,7 +22,7 @@ from typing import Optional
 # When run as script, set up package context for relative imports
 if __name__ == "__main__" or not __package__:
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    __package__ = "imprint_memory"
+    __package__ = "memo_clover"
 
 from mcp.server.fastmcp import FastMCP
 from .memory_manager import (
@@ -45,7 +45,7 @@ from .conversation import search_conversations, format_search_results
 is_http = "--http" in sys.argv
 
 mcp = FastMCP(
-    "imprint-memory",
+    "memo-clover",
     host="0.0.0.0" if is_http else "127.0.0.1",
     port=8000,
 )
@@ -625,7 +625,7 @@ def _run_http():
     app.routes.insert(3, Route("/oauth/token", oauth_token, methods=["POST"]))
     app.add_middleware(OAuthMiddleware)
 
-    print("imprint-memory HTTP mode (OAuth): http://0.0.0.0:8000/mcp", flush=True)
+    print("memo-clover HTTP mode (OAuth): http://0.0.0.0:8000/mcp", flush=True)
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
     server = uvicorn.Server(config)
     anyio.run(server.serve)

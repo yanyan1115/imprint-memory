@@ -12,8 +12,8 @@ os.environ["IMPRINT_DB"] = os.path.join(_TMP.name, "memory.db")
 os.environ["EMBED_PROVIDER"] = "openai"
 os.environ["OPENAI_API_KEY"] = ""
 
-from imprint_memory.db import _get_db  # noqa: E402
-from imprint_memory import memory_manager as mm  # noqa: E402
+from memo_clover.db import _get_db  # noqa: E402
+from memo_clover import memory_manager as mm  # noqa: E402
 
 
 class SummaryLifecycleTests(unittest.TestCase):

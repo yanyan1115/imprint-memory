@@ -1,6 +1,6 @@
 """
 Shared database connection and table initialization.
-All imprint-memory modules import _get_db() from here.
+All memo-clover modules import _get_db() from here.
 """
 
 import os

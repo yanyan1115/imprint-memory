@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-imprint-memory console — system status and live log viewer.
+memo-clover console — system status and live log viewer.
 
 Shows memory database stats, Ollama status, and tails the server log.
 
 Usage:
-    python3 -m imprint_memory.console              # status + live log
-    python3 -m imprint_memory.console --status      # status snapshot only
+    python3 -m memo_clover.console              # status + live log
+    python3 -m memo_clover.console --status      # status snapshot only
 
 Or if installed:
-    imprint-console
-    imprint-console --status
+    memo-clover-console
+    memo-clover-console --status
 """
 
 import os
@@ -109,7 +109,7 @@ def print_status():
     ts = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
     tz_name = f"UTC{'+' if TZ_OFFSET >= 0 else ''}{TZ_OFFSET}"
     print(f"\n{BOLD}{'=' * 55}{RESET}")
-    print(f"{BOLD}  IMPRINT MEMORY CONSOLE  {RESET}{DIM}  {ts} {tz_name}{RESET}")
+    print(f"{BOLD}  MemoClover CONSOLE  {RESET}{DIM}  {ts} {tz_name}{RESET}")
     print(f"{BOLD}{'=' * 55}{RESET}")
 
     # ── Database ──
