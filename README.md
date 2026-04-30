@@ -1,5 +1,7 @@
 # MemoClover
 
+**English | [中文](#中文)**
+
 MemoClover is a standalone long-term memory core for Claude. It gives Claude Code and other MCP clients a durable memory layer backed by SQLite, hybrid retrieval, daily logs, a knowledge bank, conversation search, a message bus, and a small task queue.
 
 It can run by itself as a local MCP server, or as the memory engine inside the larger [Claude Imprint](https://github.com/Qizhan7/claude-imprint) framework.
@@ -187,6 +189,210 @@ Use MemoClover alone when you want a compact memory engine. Use Claude Imprint w
 ## Credits
 
 MemoClover was shaped and implemented with help from:
+
+- Anthropic Claude Code
+- OpenAI ChatGPT Codex
+- Google Gemini
+
+## License
+
+MIT
+
+---
+
+<a id="中文"></a>
+
+# MemoClover
+
+**[English](#memoclover) | 中文**
+
+MemoClover 是一个面向 Claude 的独立长期记忆核心。它为 Claude Code 和其他 MCP 客户端提供一层持久记忆能力，底层由 SQLite、混合检索、日记日志、知识库、对话搜索、消息总线和一个小型任务队列支撑。
+
+它既可以作为本地 MCP server 独立运行，也可以作为更大的 [Claude Imprint](https://github.com/Qizhan7/claude-imprint) 框架中的记忆引擎。
+
+## 它能做什么
+
+- 使用分类、来源、重要性、情绪、标签和图边保存持久记忆。
+- 通过 FTS5、向量检索、精确匹配和 RRF 融合，跨记忆、Markdown 知识库文件和对话日志进行搜索。
+- 通过面向 FTS5 的 CJK 分词支持中文/日文/韩文搜索。
+- 维护日记日志，并自动生成 `MEMORY.md` 索引。
+- 为多渠道历史提供对话搜索。
+- 暴露消息总线，用于跨服务协调。
+- 将 Claude Code 任务加入队列，异步执行。
+- 以 stdio 模式运行给 Claude Code 使用，或以 HTTP 模式运行给 Claude.ai connector 部署使用。
+
+所有状态都保存在同一个启用 WAL 的 SQLite 数据库中。MemoClover 的设计目标是足够简单，适合一台小型个人服务器，同时仍然为 Claude 提供严肃可靠的检索骨架。
+
+## 安装
+
+从 GitHub 安装：
+
+```bash
+pip install git+https://github.com/Qizhan7/MemoClover.git
+```
+
+或者克隆后本地安装：
+
+```bash
+git clone https://github.com/Qizhan7/MemoClover.git
+cd MemoClover
+pip install -e .
+```
+
+HTTP 模式需要包含可选依赖：
+
+```bash
+pip install "memo-clover[http]"
+```
+
+## Claude Code MCP 设置
+
+将 MemoClover 注册为 user-level MCP server：
+
+```bash
+claude mcp add -s user memo-clover -- memo-clover
+```
+
+也可以直接启动 server：
+
+```bash
+memo-clover
+```
+
+## HTTP 模式
+
+通过 HTTP 运行 MCP server，用于 tunnel 或 connector 部署：
+
+```bash
+memo-clover --http
+```
+
+HTTP endpoint 监听：
+
+```text
+http://0.0.0.0:8000/mcp
+```
+
+OAuth credentials 会优先从 `~/.imprint-oauth.json` 读取，然后再从环境变量读取：
+
+- `OAUTH_CLIENT_ID`
+- `OAUTH_CLIENT_SECRET`
+- `OAUTH_ACCESS_TOKEN`
+
+`~/.imprint-oauth.json` 这个文件名是为了兼容现有 Claude Imprint 部署而保留的。
+
+## MCP Tools
+
+| Tool | 用途 |
+|---|---|
+| `memory_remember` | 使用分类、来源、重要性、valence 和 arousal 保存一条记忆。 |
+| `memory_search` | 通过统一检索搜索记忆、知识库 chunks 和对话日志。 |
+| `memory_list` | 列出近期活跃记忆。 |
+| `memory_update` | 按 ID 更新记忆内容和元数据。 |
+| `memory_delete` | 按 ID 删除单条记忆。 |
+| `memory_forget` | 删除包含某个关键词的记忆。 |
+| `memory_pin` / `memory_unpin` | 保护或取消保护记忆，使其免受时间衰减影响。 |
+| `memory_add_tags` | 为记忆添加结构化标签。 |
+| `memory_add_edge` | 用带类型的关系连接两条记忆。 |
+| `memory_get_graph` | 查看标签、边和相邻记忆。 |
+| `memory_find_duplicates` | 审计语义相似的记忆对。 |
+| `memory_find_stale` | 找出陈旧或低活跃度记忆。 |
+| `memory_decay` | 应用情绪时间衰减逻辑，默认 dry-run。 |
+| `memory_reindex` | 重建向量、FTS 表和知识库 chunks。 |
+| `memory_daily_log` | 向当天日记日志追加文本。 |
+| `conversation_search` | 搜索对话历史。 |
+| `search_telegram` | 搜索 Telegram 和 heartbeat 对话。 |
+| `search_channel` | 搜索任意命名对话渠道。 |
+| `message_bus_read` / `message_bus_post` | 读取和写入共享消息总线。 |
+| `cc_execute` | 提交一个 Claude Code 任务。 |
+| `cc_check` / `cc_tasks` | 检查或列出队列任务。 |
+
+## 配置
+
+MemoClover 有意保留既有的 `IMPRINT_*` 环境变量，以保持向后兼容。现有 Claude Imprint 用户无需移动数据目录即可升级。
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `IMPRINT_DATA_DIR` | `~/.imprint` | 数据库、日志、生成索引和知识库文件的基础目录。 |
+| `IMPRINT_DB` | `$IMPRINT_DATA_DIR/memory.db` | 显式 SQLite 数据库路径。 |
+| `TZ_OFFSET` | `0` | 时间戳使用的固定 UTC 小时偏移。 |
+| `EMBED_PROVIDER` | `ollama` | Embedding provider，通常是 `ollama` 或 `openai`。 |
+| `EMBED_MODEL` | provider default | Embedding 模型名称。 |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint。 |
+| `OPENAI_API_KEY` | empty | OpenAI-compatible embeddings 的 API key。 |
+| `EMBED_API_BASE` | `https://api.openai.com` | OpenAI-compatible embedding APIs 的 Base URL。 |
+| `IMPRINT_LOCALE` | `en` | 搜索结果标签；中文标签使用 `zh`。 |
+| `IMPRINT_BANK_EXCLUDE` | empty | 需要跳过的 Markdown 知识库文件名，逗号分隔。 |
+
+## Embeddings
+
+默认情况下，MemoClover 会调用 Ollama，并期待本地存在类似 `bge-m3` 的 embedding 模型：
+
+```bash
+ollama pull bge-m3
+ollama serve
+```
+
+OpenAI-compatible embeddings：
+
+```bash
+export EMBED_PROVIDER=openai
+export OPENAI_API_KEY=sk-...
+export EMBED_MODEL=text-embedding-3-small
+```
+
+切换 embedding provider 或模型后，请调用 `memory_reindex` 重建向量行和派生搜索索引。
+
+如果没有可用的 embedding provider，MemoClover 会退回到关键词搜索。记忆仍然可用，只是语义能力会弱一些。
+
+## 数据布局
+
+```text
+~/.imprint/
+|-- memory.db
+|-- MEMORY.md
+|-- recent_context.md
+`-- memory/
+    |-- YYYY-MM-DD.md
+    `-- bank/
+        |-- experience.md
+        `-- *.md
+```
+
+`.imprint` 目录名是一项兼容承诺。MemoClover 拥有记忆引擎；Claude Imprint 和其他 shell 可以共享同一个数据根目录。
+
+## 开发
+
+运行核心测试套件：
+
+```bash
+python -m pytest -q
+```
+
+开发时以模块方式运行 server：
+
+```bash
+python -m memo_clover.server
+python -m memo_clover.server --http
+```
+
+查看本地状态：
+
+```bash
+memo-clover-console --status
+```
+
+## 与 Claude Imprint 的关系
+
+MemoClover 是核心记忆包。它负责 Python API、MCP tools、SQLite schema、索引、检索、摘要、衰减逻辑和任务队列。
+
+Claude Imprint 是围绕它构建的全栈编排框架。它添加 Dashboard、hooks、部署模板、cron tasks、Telegram utilities、heartbeat automation、Cloudflare Tunnel 指南和集成测试。
+
+当你想要一个紧凑的记忆引擎时，单独使用 MemoClover。当你想要完整的运行外壳时，使用 Claude Imprint。
+
+## 致谢
+
+MemoClover 在以下工具的帮助下成形并实现：
 
 - Anthropic Claude Code
 - OpenAI ChatGPT Codex
