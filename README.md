@@ -192,7 +192,7 @@ MemoClover is forked from [`Qizhan7/imprint-memory`](https://github.com/Qizhan7/
 
 Deep thanks to the original author for the core inspiration and foundational architecture that made this project possible.
 
-The emotional decay logic — valence/arousal tagging, the modified Ebbinghaus forgetting curve, and the surfacing mechanism — is adapted from [P0luz/Ombre-Brain](https://github.com/P0luz/Ombre-Brain). Deep thanks for that design.
+The emotional decay logic — valence/arousal tagging, the modified Ebbinghaus forgetting curve, and the surfacing mechanism — is adapted from [`P0luz/Ombre-Brain`](https://github.com/P0luz/Ombre-Brain). Deep thanks for that design.
 
 ## Credits
 
@@ -404,7 +404,7 @@ MemoClover fork 自 [`Qizhan7/imprint-memory`](https://github.com/Qizhan7/imprin
 
 由衷感谢原作者提供的核心灵感与基础架构，让这个项目得以继续演进。
 
-情感衰减部分——效价/唤醒度打标、改进版艾宾浩斯遗忘曲线、主动浮现机制——参考自 [P0luz/Ombre-Brain](https://github.com/P0luz/Ombre-Brain)，感谢该项目的设计思路。
+情感衰减部分——效价/唤醒度打标、改进版艾宾浩斯遗忘曲线、主动浮现机制——参考自 [`P0luz/Ombre-Brain`](https://github.com/P0luz/Ombre-Brain)，感谢该项目的设计思路。
 
 ## 致谢
 
