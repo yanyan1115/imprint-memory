@@ -186,6 +186,12 @@ Claude Imprint is the full-stack orchestration framework around it. It adds Dash
 
 Use MemoClover alone when you want a compact memory engine. Use Claude Imprint when you want the full operating shell.
 
+## Project Origin / Lineage
+
+MemoClover is forked from [`Qizhan7/imprint-memory`](https://github.com/Qizhan7/imprint-memory). On top of that foundation, this project has gone through large-scale refactoring, Windows compatibility improvements, bilingual English/Chinese documentation support, and a broader brand upgrade.
+
+Deep thanks to the original author for the core inspiration and foundational architecture that made this project possible.
+
 ## Credits
 
 MemoClover was shaped and implemented with help from:
@@ -389,6 +395,12 @@ MemoClover 是核心记忆包。它负责 Python API、MCP tools、SQLite schema
 Claude Imprint 是围绕它构建的全栈编排框架。它添加 Dashboard、hooks、部署模板、cron tasks、Telegram utilities、heartbeat automation、Cloudflare Tunnel 指南和集成测试。
 
 当你想要一个紧凑的记忆引擎时，单独使用 MemoClover。当你想要完整的运行外壳时，使用 Claude Imprint。
+
+## 项目起源
+
+MemoClover fork 自 [`Qizhan7/imprint-memory`](https://github.com/Qizhan7/imprint-memory)。在这一基础上，本项目进行了大规模重构、Windows 适配优化、中英双语文档支持，以及更完整的品牌升级。
+
+由衷感谢原作者提供的核心灵感与基础架构，让这个项目得以继续演进。
 
 ## 致谢
 
