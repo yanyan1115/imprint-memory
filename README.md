@@ -392,7 +392,7 @@ Claude Imprint 是围绕它构建的全栈编排框架。它添加 Dashboard、h
 
 ## 致谢
 
-MemoClover 在以下工具的帮助下成形并实现：
+MemoClover 在以下 AI 的帮助下成形并实现：
 
 - Anthropic Claude Code
 - OpenAI ChatGPT Codex
