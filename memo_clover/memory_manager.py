@@ -5,6 +5,7 @@ Includes RRF unified retrieval across memory, bank, and conversation pools.
 """
 
 import json
+import logging
 import math
 import os
 import re
@@ -18,9 +19,10 @@ from typing import Optional
 from .db import (
     _get_db, now_local, now_str,
     DATA_DIR, DB_PATH, DAILY_LOG_DIR, BANK_DIR, MEMORY_INDEX, LOCAL_TZ,
-    segment_cjk, sanitize_fts_query,
-    _CJK_RE, _JIEBA_OK,
+    build_fts_match_query, like_search_terms, segment_cjk, sanitize_fts_query,
 )
+
+logger = logging.getLogger(__name__)
 
 # ─── Embedding Config ────────────────────────────────────
 EMBED_PROVIDER = os.environ.get("EMBED_PROVIDER", "ollama")  # "ollama" or "openai"
@@ -60,8 +62,23 @@ def _embed_ollama(text: str) -> Optional[list[float]]:
             embeddings = data.get("embeddings", [])
             if embeddings and len(embeddings[0]) > 0:
                 return embeddings[0]
-    except Exception:
-        pass
+            logger.warning(
+                "Ollama embedding returned an empty vector payload; provider=%s model=%s url=%s. "
+                "Vector retrieval will fall back to text-only search.",
+                EMBED_PROVIDER,
+                EMBED_MODEL,
+                OLLAMA_URL,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Ollama embedding failed; provider=%s model=%s url=%s error=%s. "
+            "Vector retrieval will fall back to text-only search.",
+            EMBED_PROVIDER,
+            EMBED_MODEL,
+            OLLAMA_URL,
+            exc,
+            exc_info=True,
+        )
     return None
 
 
@@ -70,6 +87,13 @@ def _embed_openai(text: str) -> Optional[list[float]]:
     Works with: OpenAI, Voyage AI, Azure OpenAI, any OpenAI-compatible service.
     Set EMBED_API_BASE to point to your provider."""
     if not OPENAI_API_KEY:
+        logger.warning(
+            "OpenAI-compatible embedding is configured but OPENAI_API_KEY is empty; "
+            "provider=%s model=%s base=%s. Vector retrieval will fall back to text-only search.",
+            EMBED_PROVIDER,
+            EMBED_MODEL,
+            EMBED_API_BASE,
+        )
         return None
     try:
         url = f"{EMBED_API_BASE.rstrip('/')}/v1/embeddings"
@@ -87,17 +111,61 @@ def _embed_openai(text: str) -> Optional[list[float]]:
             items = data.get("data", [])
             if items and "embedding" in items[0]:
                 return items[0]["embedding"]
-    except Exception:
-        pass
+            logger.warning(
+                "OpenAI-compatible embedding returned an empty payload; provider=%s model=%s base=%s. "
+                "Vector retrieval will fall back to text-only search.",
+                EMBED_PROVIDER,
+                EMBED_MODEL,
+                EMBED_API_BASE,
+            )
+    except Exception as exc:
+        logger.warning(
+            "OpenAI-compatible embedding failed; provider=%s model=%s base=%s error=%s. "
+            "Vector retrieval will fall back to text-only search.",
+            EMBED_PROVIDER,
+            EMBED_MODEL,
+            EMBED_API_BASE,
+            exc,
+            exc_info=True,
+        )
     return None
 
 
 def _embed(text: str) -> Optional[list[float]]:
     """Generate embedding vector using configured provider.
     Returns None on failure (search falls back to FTS5 keyword only)."""
-    if EMBED_PROVIDER == "openai":
-        return _embed_openai(text)
-    return _embed_ollama(text)
+    try:
+        if EMBED_PROVIDER == "openai":
+            vec = _embed_openai(text)
+        elif EMBED_PROVIDER == "ollama":
+            vec = _embed_ollama(text)
+        else:
+            logger.warning(
+                "Unknown embedding provider '%s'; model=%s. "
+                "Vector retrieval will fall back to text-only search.",
+                EMBED_PROVIDER,
+                EMBED_MODEL,
+            )
+            return None
+    except Exception as exc:
+        logger.warning(
+            "Embedding provider raised unexpectedly; provider=%s model=%s error=%s. "
+            "Vector retrieval will fall back to text-only search.",
+            EMBED_PROVIDER,
+            EMBED_MODEL,
+            exc,
+            exc_info=True,
+        )
+        return None
+
+    if not vec:
+        logger.warning(
+            "Embedding unavailable; provider=%s model=%s. "
+            "Search is running in text-only fallback mode.",
+            EMBED_PROVIDER,
+            EMBED_MODEL,
+        )
+    return vec
 
 
 def _vec_to_blob(vec: list[float]) -> bytes:
@@ -1161,39 +1229,35 @@ def _days_since(time_str: str, default: float = 30.0) -> float:
         return default
 
 
-def _fts_query_cjk(query: str) -> str:
-    """Build an FTS5 MATCH expression with proper CJK tokenization."""
-    if not _CJK_RE.search(query):
-        return query
-
-    if _JIEBA_OK:
-        return segment_cjk(query)
-
-    parts = re.split(r'([\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df'
-                     r'\U0002a700-\U0002ebef\u3000-\u303f\uff00-\uffef]+)', query)
-    tokens = []
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        if _CJK_RE.search(part):
-            chars = [c for c in part if _CJK_RE.match(c)]
-            if len(chars) >= 2:
-                tokens.append('"' + ' '.join(chars) + '"')
-            elif len(chars) == 1:
-                tokens.append(chars[0])
-        else:
-            tokens.append(part)
-    return ' '.join(tokens)
-
-
 def _sanitize_fts(query: str) -> str:
-    """Strip FTS5 operators and apply CJK segmentation."""
-    cleaned = re.sub(r'["\(\)\*\:\^\{\}]', " ", query)
-    cleaned = " ".join(cleaned.split()).strip()
-    if not cleaned:
-        return cleaned
-    return _fts_query_cjk(cleaned)
+    """Build a sanitized, recall-friendly FTS5 MATCH expression."""
+    return build_fts_match_query(query)
+
+
+def _rank_like_rows(
+    rows,
+    *,
+    key_prefix: str,
+    content_field: str,
+    details_factory,
+) -> tuple[list[tuple[str, int]], dict[str, dict]]:
+    """Rank LIKE fallback rows by keyword coverage instead of whole-query match."""
+    scored = []
+    for r in rows:
+        matched = int(r["matched_terms"])
+        if matched <= 0:
+            continue
+        scored.append((r, matched, len((r[content_field] or ""))))
+
+    scored.sort(key=lambda item: (-item[1], item[2]))
+
+    ranking: list[tuple[str, int]] = []
+    details: dict[str, dict] = {}
+    for idx, (r, _, _) in enumerate(scored[:LIKE_LIMIT]):
+        key = f"{key_prefix}_{r['id']}"
+        ranking.append((key, idx + 1))
+        details[key] = details_factory(r)
+    return ranking, details
 
 
 # ─── RRF Core ───────────────────────────────────────────
@@ -1316,8 +1380,14 @@ def _search_memory_channels(query, query_vec, db, *, category=None, limit=50):
                 key = f"mem_{r['id']}"
                 fts_ranking.append((key, idx + 1))
                 details[key] = dict(r)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Memory FTS search failed; query=%r fts_query=%r error=%s",
+                query,
+                safe_q,
+                exc,
+                exc_info=True,
+            )
 
     if query_vec:
         cat_sql = "AND m.category = ?" if category else ""
@@ -1349,26 +1419,36 @@ def _search_memory_channels(query, query_vec, db, *, category=None, limit=50):
             details[key]["vec_similarity"] = sim
 
     like_ranking = []
-    q_lower = query.lower()
-    if len(q_lower) >= 2:
+    like_terms = like_search_terms(query)
+    if like_terms:
         cat_sql = "AND category = ?" if category else ""
-        params = [f"%{q_lower}%"] + ([category] if category else []) + [LIKE_LIMIT]
+        where_sql = " OR ".join("LOWER(content) LIKE ?" for _ in like_terms)
+        score_sql = " + ".join(
+            "CASE WHEN LOWER(content) LIKE ? THEN 1 ELSE 0 END"
+            for _ in like_terms
+        )
+        like_params = [f"%{term.lower()}%" for term in like_terms]
+        params = like_params + like_params + ([category] if category else []) + [LIKE_LIMIT]
         like_rows = db.execute(
             f"""SELECT id, content, category, source, importance,
                        valence, arousal, resolved, decay_rate,
                        created_at, recalled_count,
-                       last_accessed_at, pinned
+                       last_accessed_at, pinned,
+                       ({score_sql}) AS matched_terms
                 FROM memories
-                WHERE LOWER(content) LIKE ? AND superseded_by IS NULL {cat_sql}
-                ORDER BY created_at DESC
+                WHERE ({where_sql}) AND superseded_by IS NULL {cat_sql}
+                ORDER BY matched_terms DESC, created_at DESC
                 LIMIT ?""",
             params,
         ).fetchall()
-        for idx, r in enumerate(like_rows):
-            key = f"mem_{r['id']}"
-            like_ranking.append((key, idx + 1))
-            if key not in details:
-                details[key] = dict(r)
+        like_ranking, like_details = _rank_like_rows(
+            like_rows,
+            key_prefix="mem",
+            content_field="content",
+            details_factory=lambda r: dict(r),
+        )
+        for key, item in like_details.items():
+            details.setdefault(key, item)
 
     return fts_ranking, vec_ranking, like_ranking, details
 
@@ -1380,22 +1460,37 @@ def _search_bank_channels(query, query_vec, db, *, limit=50):
     fts_ranking = []
     vec_ranking = []
 
-    q_lower = query.lower()
-    kw_rows = db.execute(
-        "SELECT id, chunk_text, file_path, file_mtime FROM bank_chunks"
-    ).fetchall()
-    matches = [r for r in kw_rows if q_lower in r["chunk_text"].lower()]
-    for idx, r in enumerate(matches[:limit]):
-        key = f"bank_{r['id']}"
-        fts_ranking.append((key, idx + 1))
-        details[key] = {
-            "id": r["id"],
-            "content": r["chunk_text"],
-            "source": Path(r["file_path"]).stem,
-            "file_path": r["file_path"],
-            "file_mtime": r["file_mtime"],
-            "category": "bank",
-        }
+    like_terms = like_search_terms(query)
+    if like_terms:
+        where_sql = " OR ".join("LOWER(chunk_text) LIKE ?" for _ in like_terms)
+        score_sql = " + ".join(
+            "CASE WHEN LOWER(chunk_text) LIKE ? THEN 1 ELSE 0 END"
+            for _ in like_terms
+        )
+        like_params = [f"%{term.lower()}%" for term in like_terms]
+        kw_rows = db.execute(
+            f"""SELECT id, chunk_text, file_path, file_mtime,
+                       ({score_sql}) AS matched_terms
+                FROM bank_chunks
+                WHERE ({where_sql})
+                ORDER BY matched_terms DESC, file_mtime DESC
+                LIMIT ?""",
+            like_params + like_params + [limit],
+        ).fetchall()
+        fts_ranking, bank_details = _rank_like_rows(
+            kw_rows,
+            key_prefix="bank",
+            content_field="chunk_text",
+            details_factory=lambda r: {
+                "id": r["id"],
+                "content": r["chunk_text"],
+                "source": Path(r["file_path"]).stem,
+                "file_path": r["file_path"],
+                "file_mtime": r["file_mtime"],
+                "category": "bank",
+            },
+        )
+        details.update(bank_details)
 
     if query_vec:
         v_rows = db.execute(
@@ -1461,35 +1556,52 @@ def _search_conv_channels(query, query_vec, db, *, platform="", limit=50):
                 key = f"conv_{r['id']}"
                 fts_ranking.append((key, idx + 1))
                 details[key] = dict(r)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Conversation FTS search failed; query=%r fts_query=%r error=%s",
+                query,
+                safe_q,
+                exc,
+                exc_info=True,
+            )
 
     like_ranking = []
-    q_lower = query.lower()
-    if len(q_lower) >= 2:
+    like_terms = like_search_terms(query)
+    if like_terms:
+        where_sql = " OR ".join("LOWER(content) LIKE ?" for _ in like_terms)
+        score_sql = " + ".join(
+            "CASE WHEN LOWER(content) LIKE ? THEN 1 ELSE 0 END"
+            for _ in like_terms
+        )
+        like_params = [f"%{term.lower()}%" for term in like_terms]
         if platform:
             like_rows = db.execute(
-                """SELECT id, platform, direction, speaker, content, created_at
+                f"""SELECT id, platform, direction, speaker, content, created_at,
+                          ({score_sql}) AS matched_terms
                    FROM conversation_log
-                   WHERE LOWER(content) LIKE ? AND platform = ?
-                   ORDER BY created_at DESC
+                   WHERE ({where_sql}) AND platform = ?
+                   ORDER BY matched_terms DESC, created_at DESC
                    LIMIT ?""",
-                (f"%{q_lower}%", platform, LIKE_LIMIT),
+                like_params + like_params + [platform, LIKE_LIMIT],
             ).fetchall()
         else:
             like_rows = db.execute(
-                """SELECT id, platform, direction, speaker, content, created_at
+                f"""SELECT id, platform, direction, speaker, content, created_at,
+                          ({score_sql}) AS matched_terms
                    FROM conversation_log
-                   WHERE LOWER(content) LIKE ?
-                   ORDER BY created_at DESC
+                   WHERE ({where_sql})
+                   ORDER BY matched_terms DESC, created_at DESC
                    LIMIT ?""",
-                (f"%{q_lower}%", LIKE_LIMIT),
+                like_params + like_params + [LIKE_LIMIT],
             ).fetchall()
-        for idx, r in enumerate(like_rows):
-            key = f"conv_{r['id']}"
-            like_ranking.append((key, idx + 1))
-            if key not in details:
-                details[key] = dict(r)
+        like_ranking, like_details = _rank_like_rows(
+            like_rows,
+            key_prefix="conv",
+            content_field="content",
+            details_factory=lambda r: dict(r),
+        )
+        for key, item in like_details.items():
+            details.setdefault(key, item)
 
     return fts_ranking, vec_ranking, like_ranking, details
 

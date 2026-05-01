@@ -42,13 +42,31 @@ except ImportError:
     _JIEBA_OK = False
 
 
+_FTS_LONG_QUERY_CHARS = 80
+_FTS_LONG_QUERY_TOKENS = 6
+_FTS_TOKEN_LIMIT = 12
+_LIKE_TOKEN_LIMIT = 16
+
+_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "but", "by", "can", "could",
+    "do", "does", "for", "from", "had", "has", "have", "how", "i", "if",
+    "in", "into", "is", "it", "me", "my", "not", "of", "on", "or", "our",
+    "please", "should", "that", "the", "their", "then", "there", "this",
+    "to", "was", "we", "what", "when", "where", "which", "who", "why",
+    "with", "would", "you", "your",
+    "一个", "一下", "以及", "但是", "什么", "他们", "你们", "因为", "如果",
+    "它们", "我们", "所以", "现在", "这个", "那个", "这些", "那些", "还是",
+}
+
+
 def sanitize_fts_query(query: str) -> str:
     """Sanitize a query string for FTS5 MATCH.
     Removes operators and special characters that could cause parse errors."""
     # Strip FTS5 operators and special characters
-    cleaned = re.sub(r'["\(\)\*\:\^\{\}]', ' ', query)
+    cleaned = re.sub(r'["\(\)\*\:\^\{\}\[\],;!?/\\|&=<>`~]', ' ', query)
+    cleaned = re.sub(r"[-–—]+", " ", cleaned)
     # Remove FTS5 boolean keywords when used as operators
-    cleaned = re.sub(r'\b(AND|OR|NOT|NEAR)\b', ' ', cleaned)
+    cleaned = re.sub(r'\b(AND|OR|NOT|NEAR)\b', ' ', cleaned, flags=re.IGNORECASE)
     # Collapse whitespace
     cleaned = ' '.join(cleaned.split())
     return cleaned.strip()
@@ -64,6 +82,97 @@ def segment_cjk(text: str) -> str:
     if _JIEBA_OK:
         return " ".join(_jieba.cut_for_search(text))
     return re.sub(r'\s+', ' ', _CJK_RE.sub(r' \1 ', text)).strip()
+
+
+def _is_cjk_token(token: str) -> bool:
+    return bool(_CJK_RE.search(token))
+
+
+def _normalize_search_token(token: str) -> str:
+    token = token.strip().strip("'._+#")
+    if not token:
+        return ""
+    if token.isascii():
+        token = re.sub(r"[^A-Za-z0-9_]+", "", token).lower()
+    return token.strip()
+
+
+def tokenize_search_query(
+    query: str,
+    *,
+    max_tokens: int = _LIKE_TOKEN_LIMIT,
+    include_single_cjk: bool = False,
+) -> list[str]:
+    """Extract useful search tokens from natural-language queries.
+
+    Long user prompts often contain filler words around a few high-signal terms.
+    This keeps FTS5/LIKE channels focused on those terms while semantic search
+    can still receive the full original query.
+    """
+    cleaned = sanitize_fts_query(query)
+    if not cleaned:
+        return []
+
+    segmented = segment_cjk(cleaned)
+    tokens: list[str] = []
+    seen: set[str] = set()
+
+    for raw in segmented.split():
+        token = _normalize_search_token(raw)
+        if not token:
+            continue
+
+        key = token.lower()
+        if key in seen or key in _STOPWORDS:
+            continue
+
+        if _is_cjk_token(token):
+            if len(token) == 1 and not include_single_cjk:
+                continue
+        elif len(token) < 2:
+            continue
+
+        tokens.append(token)
+        seen.add(key)
+        if len(tokens) >= max_tokens:
+            break
+
+    return tokens
+
+
+def _quote_fts_token(token: str) -> str:
+    return '"' + token.replace('"', '""') + '"'
+
+
+def build_fts_match_query(query: str) -> str:
+    """Build a recall-friendly FTS5 MATCH expression.
+
+    Short queries stay precise with implicit AND semantics. Long prompts are
+    tokenized, stopword-filtered, truncated, and joined with OR so one noisy
+    phrase does not require every incidental word to appear in the same row.
+    """
+    cleaned = sanitize_fts_query(query)
+    if not cleaned:
+        return ""
+
+    tokens = tokenize_search_query(
+        cleaned,
+        max_tokens=_FTS_TOKEN_LIMIT,
+        include_single_cjk=not _JIEBA_OK,
+    )
+    if not tokens:
+        return segment_cjk(cleaned)
+
+    quoted = [_quote_fts_token(t) for t in tokens]
+    is_long = len(cleaned) >= _FTS_LONG_QUERY_CHARS or len(tokens) >= _FTS_LONG_QUERY_TOKENS
+    if is_long:
+        return " OR ".join(quoted)
+    return " ".join(quoted)
+
+
+def like_search_terms(query: str) -> list[str]:
+    """Return bounded tokens for LIKE fallback channels."""
+    return tokenize_search_query(query, max_tokens=_LIKE_TOKEN_LIMIT)
 
 
 def _get_db() -> sqlite3.Connection:

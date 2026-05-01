@@ -1,3 +1,4 @@
+import importlib
 import os
 import sqlite3
 import sys
@@ -183,6 +184,45 @@ class RetrievalEvaluationTests(unittest.TestCase):
         self.assertEqual(results[0]["pool"], "conversation")
         self.assertEqual(results[0]["id"], self.conversation_id)
         self.assertIn("telegram incident", results[0]["content"])
+
+    def test_long_query_recalls_memory_when_embedding_provider_fails(self):
+        target_id = _insert_memory(
+            "bge-m3 service outage caused memory_search to silently degrade into keyword retrieval",
+            category="experience",
+        )
+
+        long_query = (
+            "Can you help me investigate why a very long memory_search prompt about "
+            "the bge-m3 service outage and silent keyword fallback has terrible recall "
+            "even though the relevant memory clearly mentions provider failure diagnostics?"
+        )
+
+        old_embed = mm._embed
+
+        def _failing_provider(text: str):
+            raise RuntimeError("simulated embedding provider outage")
+
+        try:
+            importlib.reload(mm)
+            old_openai = mm._embed_openai
+            mm._embed_openai = _failing_provider
+            with self.assertLogs("memo_clover.memory_manager", level="WARNING") as logs:
+                results = mm.unified_search(
+                    long_query,
+                    pools=["memory"],
+                    limit=5,
+                    _internal=True,
+                )
+        finally:
+            mm._embed = old_embed
+            if "old_openai" in locals():
+                mm._embed_openai = old_openai
+
+        self.assertIn(target_id, [r["id"] for r in results])
+        self.assertIn(
+            "Vector retrieval will fall back to text-only search",
+            "\n".join(logs.output),
+        )
 
 
 if __name__ == "__main__":
