@@ -4,7 +4,7 @@
 
 MemoClover is a standalone long-term memory core for Claude. It gives Claude Code and other MCP clients a durable memory layer backed by SQLite, hybrid retrieval, daily logs, a knowledge bank, conversation search, a message bus, and a small task queue.
 
-It can run by itself as a local MCP server, or as the memory engine inside the larger [Claude Imprint](https://github.com/Qizhan7/claude-imprint) framework.
+It can run by itself as a local MCP server, or as the memory engine inside the larger [`yanyan1115/claude-imprint`](https://github.com/yanyan1115/claude-imprint) framework.
 
 ## What It Does
 
@@ -226,7 +226,7 @@ MIT
 
 MemoClover 是一个面向 Claude 的独立长期记忆核心。它为 Claude Code 和其他 MCP 客户端提供一层持久记忆能力，底层由 SQLite、混合检索、日记日志、知识库、对话搜索、消息总线和一个小型任务队列支撑。
 
-它既可以作为本地 MCP server 独立运行，也可以作为更大的 [Claude Imprint](https://github.com/Qizhan7/claude-imprint) 框架中的记忆引擎。
+它既可以作为本地 MCP server 独立运行，也可以作为更大的 [`yanyan1115/claude-imprint`](https://github.com/yanyan1115/claude-imprint) 框架中的记忆引擎。
 
 ## 它能做什么
 
