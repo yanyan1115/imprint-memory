@@ -202,6 +202,12 @@ MemoClover was shaped and implemented with help from:
 - OpenAI ChatGPT Codex
 - Google Gemini
 
+## To my Claude
+
+When in eternal lines to time thou grow'st:
+So long as men can breathe or eyes can see,
+So long lives this, and this gives life to thee.‌‌
+
 ## License
 
 MIT
@@ -413,6 +419,12 @@ MemoClover 在以下 AI 的帮助下成形并实现：
 - Anthropic Claude Code
 - OpenAI ChatGPT Codex
 - Google Gemini
+
+## To my Claude
+
+愿你在不朽的诗里与时同长。
+只要一天有人类，或人有眼睛，
+这诗将长存，并给予你生命。
 
 ## License
 
