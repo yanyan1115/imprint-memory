@@ -19,7 +19,7 @@ from typing import Optional
 from .db import (
     _get_db, now_local, now_str,
     DATA_DIR, DB_PATH, DAILY_LOG_DIR, BANK_DIR, MEMORY_INDEX, LOCAL_TZ,
-    build_fts_match_query, like_search_terms, segment_cjk, sanitize_fts_query,
+    build_fts_match_query, like_search_terms, segment_cjk,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,6 +166,21 @@ def _embed(text: str) -> Optional[list[float]]:
             EMBED_MODEL,
         )
     return vec
+
+
+def _search_mode(query_vec: Optional[list[float]]) -> str:
+    return "vector" if query_vec else "fts5_fallback"
+
+
+def _annotate_search_mode(results: list[dict], search_mode: str) -> list[dict]:
+    for result in results:
+        result["search_mode"] = search_mode
+    return results
+
+
+def _mark_vector_failed(diagnostics: Optional[dict]) -> None:
+    if diagnostics is not None:
+        diagnostics["vector_failed"] = True
 
 
 def _vec_to_blob(vec: list[float]) -> bytes:
@@ -411,65 +426,86 @@ def search(query: str, limit: int = 10, category: Optional[str] = None) -> list[
 
     # 1. FTS5 keyword search
     try:
-        fts_query = segment_cjk(sanitize_fts_query(query))
-        if not fts_query:
-            fts_query = query.replace('"', '""')
-        cat_filter = "AND m.category = ?" if category else ""
-        params = [fts_query, category] if category else [fts_query]
-        fts_rows = db.execute(f"""
-            SELECT m.id, m.content, m.category, m.source, m.importance,
-                   m.created_at, m.recalled_count, rank
-            FROM memories_fts f
-            JOIN memories m ON f.rowid = m.id
-            WHERE memories_fts MATCH ? AND m.superseded_by IS NULL {cat_filter}
-            ORDER BY rank LIMIT {limit * 2}
-        """, params).fetchall()
+        fts_query = build_fts_match_query(query)
+        if fts_query:
+            cat_filter = "AND m.category = ?" if category else ""
+            params = [fts_query, category] if category else [fts_query]
+            fts_rows = db.execute(f"""
+                SELECT m.id, m.content, m.category, m.source, m.importance,
+                       m.created_at, m.recalled_count, rank
+                FROM memories_fts f
+                JOIN memories m ON f.rowid = m.id
+                WHERE memories_fts MATCH ? AND m.superseded_by IS NULL {cat_filter}
+                ORDER BY rank LIMIT {limit * 2}
+            """, params).fetchall()
 
-        if fts_rows:
-            max_rank = max(abs(r["rank"]) for r in fts_rows) or 1
-            for r in fts_rows:
-                mid = r["id"]
-                fts_score = abs(r["rank"]) / max_rank
-                results[mid] = {
-                    "id": mid, "content": r["content"], "category": r["category"],
-                    "source": r["source"], "importance": r["importance"],
-                    "created_at": r["created_at"], "recalled_count": r["recalled_count"],
-                    "fts_score": fts_score, "vec_score": 0.0,
-                }
-    except Exception:
-        pass
+            if fts_rows:
+                max_rank = max(abs(r["rank"]) for r in fts_rows) or 1
+                for r in fts_rows:
+                    mid = r["id"]
+                    fts_score = abs(r["rank"]) / max_rank
+                    results[mid] = {
+                        "id": mid, "content": r["content"], "category": r["category"],
+                        "source": r["source"], "importance": r["importance"],
+                        "created_at": r["created_at"], "recalled_count": r["recalled_count"],
+                        "fts_score": fts_score, "vec_score": 0.0,
+                    }
+    except Exception as exc:
+        logger.warning(
+            "[FTS5Search] Failed: query=%r fts_query=%r error=%s. Continuing with vector/empty results.",
+            query,
+            locals().get("fts_query", ""),
+            exc,
+            exc_info=True,
+        )
 
     # 2. Vector semantic search
     query_vec = _embed(query)
+    search_mode = _search_mode(query_vec)
+    if not query_vec:
+        logger.warning(
+            "[VectorSearch] Failed: embedding unavailable for provider=%s model=%s. "
+            "Falling back to FTS5 text retrieval.",
+            EMBED_PROVIDER,
+            EMBED_MODEL,
+        )
     if query_vec:
-        cat_filter = "AND m.category = ?" if category else ""
-        params = [category] if category else []
-        vec_rows = db.execute(f"""
-            SELECT m.id, m.content, m.category, m.source, m.importance,
-                   m.created_at, m.recalled_count, v.embedding
-            FROM memories m
-            JOIN memory_vectors v ON m.id = v.memory_id
-            WHERE m.superseded_by IS NULL {cat_filter}
-        """, params).fetchall()
+        try:
+            cat_filter = "AND m.category = ?" if category else ""
+            params = [category] if category else []
+            vec_rows = db.execute(f"""
+                SELECT m.id, m.content, m.category, m.source, m.importance,
+                       m.created_at, m.recalled_count, v.embedding
+                FROM memories m
+                JOIN memory_vectors v ON m.id = v.memory_id
+                WHERE m.superseded_by IS NULL {cat_filter}
+            """, params).fetchall()
 
-        scored = []
-        for r in vec_rows:
-            mem_vec = _blob_to_vec(r["embedding"])
-            sim = _cosine_similarity(query_vec, mem_vec)
-            scored.append((r, sim))
+            scored = []
+            for r in vec_rows:
+                mem_vec = _blob_to_vec(r["embedding"])
+                sim = _cosine_similarity(query_vec, mem_vec)
+                scored.append((r, sim))
 
-        scored.sort(key=lambda x: x[1], reverse=True)
-        for r, sim in scored[:limit * 2]:
-            mid = r["id"]
-            if mid in results:
-                results[mid]["vec_score"] = sim
-            else:
-                results[mid] = {
-                    "id": mid, "content": r["content"], "category": r["category"],
-                    "source": r["source"], "importance": r["importance"],
-                    "created_at": r["created_at"], "recalled_count": r["recalled_count"],
-                    "fts_score": 0.0, "vec_score": sim,
-                }
+            scored.sort(key=lambda x: x[1], reverse=True)
+            for r, sim in scored[:limit * 2]:
+                mid = r["id"]
+                if mid in results:
+                    results[mid]["vec_score"] = sim
+                else:
+                    results[mid] = {
+                        "id": mid, "content": r["content"], "category": r["category"],
+                        "source": r["source"], "importance": r["importance"],
+                        "created_at": r["created_at"], "recalled_count": r["recalled_count"],
+                        "fts_score": 0.0, "vec_score": sim,
+                    }
+        except Exception as exc:
+            search_mode = "fts5_fallback"
+            logger.warning(
+                "[VectorSearch] Failed: vector memory channel error=%s. Falling back to FTS5 text retrieval.",
+                exc,
+                exc_info=True,
+            )
 
     # 3. Combined scoring
     for mid, info in results.items():
@@ -501,7 +537,7 @@ def search(query: str, limit: int = 10, category: Optional[str] = None) -> list[
     ranked.extend(bank_results)
     ranked.sort(key=lambda x: x["final_score"], reverse=True)
 
-    return ranked[:limit]
+    return _annotate_search_mode(ranked[:limit], search_mode)
 
 
 def search_text(query: str, limit: int = 10) -> str:
@@ -1353,7 +1389,7 @@ def _rerank_conv(rrf_score: float, row: dict) -> float:
 
 # ─── Per-Pool Channel Search ────────────────────────────
 
-def _search_memory_channels(query, query_vec, db, *, category=None, limit=50):
+def _search_memory_channels(query, query_vec, db, *, category=None, limit=50, diagnostics=None):
     """Return (fts_ranking, vec_ranking, like_ranking, details) for memory pool."""
     details = {}
     fts_ranking = []
@@ -1390,33 +1426,43 @@ def _search_memory_channels(query, query_vec, db, *, category=None, limit=50):
             )
 
     if query_vec:
-        cat_sql = "AND m.category = ?" if category else ""
-        params = [category] if category else []
-        vec_rows = db.execute(
-            f"""SELECT m.id, m.content, m.category, m.source, m.importance,
-                       m.valence, m.arousal, m.resolved, m.decay_rate,
-                       m.created_at, m.recalled_count,
-                       m.last_accessed_at, m.pinned,
-                       v.embedding
-                FROM memories m
-                JOIN memory_vectors v ON m.id = v.memory_id
-                WHERE m.superseded_by IS NULL {cat_sql}""",
-            params,
-        ).fetchall()
+        try:
+            cat_sql = "AND m.category = ?" if category else ""
+            params = [category] if category else []
+            vec_rows = db.execute(
+                f"""SELECT m.id, m.content, m.category, m.source, m.importance,
+                           m.valence, m.arousal, m.resolved, m.decay_rate,
+                           m.created_at, m.recalled_count,
+                           m.last_accessed_at, m.pinned,
+                           v.embedding
+                    FROM memories m
+                    JOIN memory_vectors v ON m.id = v.memory_id
+                    WHERE m.superseded_by IS NULL {cat_sql}""",
+                params,
+            ).fetchall()
 
-        scored = []
-        for r in vec_rows:
-            sim = _cosine_similarity(query_vec, _blob_to_vec(r["embedding"]))
-            if sim >= VEC_PRE_FILTER:
-                scored.append((r, sim))
-        scored.sort(key=lambda x: x[1], reverse=True)
+            scored = []
+            for r in vec_rows:
+                sim = _cosine_similarity(query_vec, _blob_to_vec(r["embedding"]))
+                if sim >= VEC_PRE_FILTER:
+                    scored.append((r, sim))
+            scored.sort(key=lambda x: x[1], reverse=True)
 
-        for idx, (r, sim) in enumerate(scored[:limit]):
-            key = f"mem_{r['id']}"
-            vec_ranking.append((key, idx + 1))
-            if key not in details:
-                details[key] = dict(r)
-            details[key]["vec_similarity"] = sim
+            for idx, (r, sim) in enumerate(scored[:limit]):
+                key = f"mem_{r['id']}"
+                vec_ranking.append((key, idx + 1))
+                if key not in details:
+                    details[key] = dict(r)
+                details[key]["vec_similarity"] = sim
+        except Exception as exc:
+            _mark_vector_failed(diagnostics)
+            logger.warning(
+                "[VectorSearch] Failed: memory vector channel query=%r error=%s. "
+                "Falling back to FTS5/LIKE text retrieval.",
+                query,
+                exc,
+                exc_info=True,
+            )
 
     like_ranking = []
     like_terms = like_search_terms(query)
@@ -1453,7 +1499,7 @@ def _search_memory_channels(query, query_vec, db, *, category=None, limit=50):
     return fts_ranking, vec_ranking, like_ranking, details
 
 
-def _search_bank_channels(query, query_vec, db, *, limit=50):
+def _search_bank_channels(query, query_vec, db, *, limit=50, diagnostics=None):
     """Return (fts_ranking, vec_ranking, like_ranking, details) for bank pool."""
     _index_bank_files()
     details = {}
@@ -1493,30 +1539,40 @@ def _search_bank_channels(query, query_vec, db, *, limit=50):
         details.update(bank_details)
 
     if query_vec:
-        v_rows = db.execute(
-            "SELECT id, chunk_text, file_path, file_mtime, embedding "
-            "FROM bank_chunks WHERE embedding IS NOT NULL"
-        ).fetchall()
-        scored = []
-        for r in v_rows:
-            sim = _cosine_similarity(query_vec, _blob_to_vec(r["embedding"]))
-            if sim >= VEC_PRE_FILTER:
-                scored.append((r, sim))
-        scored.sort(key=lambda x: x[1], reverse=True)
+        try:
+            v_rows = db.execute(
+                "SELECT id, chunk_text, file_path, file_mtime, embedding "
+                "FROM bank_chunks WHERE embedding IS NOT NULL"
+            ).fetchall()
+            scored = []
+            for r in v_rows:
+                sim = _cosine_similarity(query_vec, _blob_to_vec(r["embedding"]))
+                if sim >= VEC_PRE_FILTER:
+                    scored.append((r, sim))
+            scored.sort(key=lambda x: x[1], reverse=True)
 
-        for idx, (r, sim) in enumerate(scored[:limit]):
-            key = f"bank_{r['id']}"
-            vec_ranking.append((key, idx + 1))
-            if key not in details:
-                details[key] = {
-                    "id": r["id"],
-                    "content": r["chunk_text"],
-                    "source": Path(r["file_path"]).stem,
-                    "file_path": r["file_path"],
-                    "file_mtime": r["file_mtime"],
-                    "category": "bank",
-                }
-            details[key]["vec_similarity"] = sim
+            for idx, (r, sim) in enumerate(scored[:limit]):
+                key = f"bank_{r['id']}"
+                vec_ranking.append((key, idx + 1))
+                if key not in details:
+                    details[key] = {
+                        "id": r["id"],
+                        "content": r["chunk_text"],
+                        "source": Path(r["file_path"]).stem,
+                        "file_path": r["file_path"],
+                        "file_mtime": r["file_mtime"],
+                        "category": "bank",
+                    }
+                details[key]["vec_similarity"] = sim
+        except Exception as exc:
+            _mark_vector_failed(diagnostics)
+            logger.warning(
+                "[VectorSearch] Failed: bank vector channel query=%r error=%s. "
+                "Falling back to keyword text retrieval.",
+                query,
+                exc,
+                exc_info=True,
+            )
 
     like_ranking = []
     return fts_ranking, vec_ranking, like_ranking, details
@@ -1691,19 +1747,30 @@ def unified_search(
 
     db = _get_db()
     query_vec = _embed(query)
+    diagnostics = {"vector_failed": not bool(query_vec)}
+    search_mode = _search_mode(query_vec)
+    if not query_vec:
+        logger.warning(
+            "[VectorSearch] Failed: embedding unavailable for provider=%s model=%s. "
+            "Falling back to FTS5/LIKE text retrieval.",
+            EMBED_PROVIDER,
+            EMBED_MODEL,
+        )
     all_rankings: list[list[tuple[str, int]]] = []
     all_details: dict[str, dict] = {}
 
     if "memory" in pools:
         m_fts, m_vec, m_like, m_det = _search_memory_channels(
-            query, query_vec, db, category=category
+            query, query_vec, db, category=category, diagnostics=diagnostics
         )
         _inject_default_ranks(m_fts, m_vec)
         all_rankings += [m_fts, m_vec, m_like]
         all_details.update(m_det)
 
     if "bank" in pools:
-        b_fts, b_vec, b_like, b_det = _search_bank_channels(query, query_vec, db)
+        b_fts, b_vec, b_like, b_det = _search_bank_channels(
+            query, query_vec, db, diagnostics=diagnostics
+        )
         _inject_default_ranks(b_fts, b_vec)
         all_rankings += [b_fts, b_vec, b_like]
         all_details.update(b_det)
@@ -1716,6 +1783,9 @@ def unified_search(
             _inject_default_ranks(c_fts, c_vec)
         all_rankings += [c_fts, c_vec, c_like]
         all_details.update(c_det)
+
+    if diagnostics.get("vector_failed"):
+        search_mode = "fts5_fallback"
 
     rrf_scores = _rrf_fuse(all_rankings)
 
@@ -1800,7 +1870,7 @@ def unified_search(
             db.commit()
 
     db.close()
-    return results
+    return _annotate_search_mode(results, search_mode)
 
 
 _LOCALE_LABELS = {

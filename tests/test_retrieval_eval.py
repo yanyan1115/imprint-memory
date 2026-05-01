@@ -185,6 +185,42 @@ class RetrievalEvaluationTests(unittest.TestCase):
         self.assertEqual(results[0]["id"], self.conversation_id)
         self.assertIn("telegram incident", results[0]["content"])
 
+    def test_single_cjk_word_query_recalls_memory_in_text_fallback(self):
+        target_id = _insert_memory(
+            "衿衿喜欢在安静的早晨整理长期记忆。",
+            category="core_profile",
+        )
+
+        results = mm.unified_search(
+            "衿衿",
+            pools=["memory"],
+            limit=5,
+            _internal=True,
+        )
+
+        self.assertIn(target_id, [r["id"] for r in results])
+        self.assertTrue(all(r["search_mode"] == "fts5_fallback" for r in results))
+
+    def test_multi_term_query_uses_fts5_or_recall(self):
+        like_id = _insert_memory("衿衿喜欢温柔、稳定、可持续的协作节奏。")
+        habit_id = _insert_memory("衿衿的习惯是先确认上下文，再推进实现。")
+
+        fts_query = db_mod.build_fts_match_query("喜欢 偏好 习惯")
+        self.assertIn(" OR ", fts_query)
+        self.assertNotIn(" AND ", fts_query)
+
+        results = mm.unified_search(
+            "喜欢 偏好 习惯",
+            pools=["memory"],
+            limit=10,
+            _internal=True,
+        )
+        result_ids = {r["id"] for r in results}
+
+        self.assertIn(like_id, result_ids)
+        self.assertIn(habit_id, result_ids)
+        self.assertTrue(all(r["search_mode"] == "fts5_fallback" for r in results))
+
     def test_long_query_recalls_memory_when_embedding_provider_fails(self):
         target_id = _insert_memory(
             "bge-m3 service outage caused memory_search to silently degrade into keyword retrieval",
@@ -219,6 +255,7 @@ class RetrievalEvaluationTests(unittest.TestCase):
                 mm._embed_openai = old_openai
 
         self.assertIn(target_id, [r["id"] for r in results])
+        self.assertTrue(all(r["search_mode"] == "fts5_fallback" for r in results))
         self.assertIn(
             "Vector retrieval will fall back to text-only search",
             "\n".join(logs.output),

@@ -147,9 +147,9 @@ def _quote_fts_token(token: str) -> str:
 def build_fts_match_query(query: str) -> str:
     """Build a recall-friendly FTS5 MATCH expression.
 
-    Short queries stay precise with implicit AND semantics. Long prompts are
-    tokenized, stopword-filtered, truncated, and joined with OR so one noisy
-    phrase does not require every incidental word to appear in the same row.
+    Natural-language queries are tokenized, stopword-filtered, truncated, and
+    joined with OR so one noisy phrase does not require every incidental word
+    to appear in the same row.
     """
     cleaned = sanitize_fts_query(query)
     if not cleaned:
@@ -164,10 +164,9 @@ def build_fts_match_query(query: str) -> str:
         return segment_cjk(cleaned)
 
     quoted = [_quote_fts_token(t) for t in tokens]
-    is_long = len(cleaned) >= _FTS_LONG_QUERY_CHARS or len(tokens) >= _FTS_LONG_QUERY_TOKENS
-    if is_long:
+    if len(quoted) > 1:
         return " OR ".join(quoted)
-    return " ".join(quoted)
+    return quoted[0]
 
 
 def like_search_terms(query: str) -> list[str]:
