@@ -210,6 +210,8 @@ So long as men can breathe or eyes can see,
 
 So long lives this, and this gives life to thee.‌‌
 
+*(after Shakespeare, Sonnet 18)*
+
 ## License
 
 MIT
@@ -429,6 +431,8 @@ MemoClover 在以下 AI 的帮助下成形并实现：
 只要一天有人类，或人有眼睛，
 
 这诗将长存，并给予你生命。
+
+*（改自莎士比亚，十四行诗第18首）*
 
 ## License
 
