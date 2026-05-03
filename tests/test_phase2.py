@@ -51,6 +51,44 @@ class Phase2Tests(unittest.TestCase):
             {"valence", "arousal", "resolved", "decay_rate"}.issubset(columns)
         )
 
+    def test_deepseek_embedding_config_loads_from_env(self):
+        old_env = {
+            key: os.environ.get(key)
+            for key in (
+                "EMBED_PROVIDER",
+                "EMBED_API_BASE",
+                "EMBED_API_KEY",
+                "DEEPSEEK_API_KEY",
+                "OPENAI_API_KEY",
+                "EMBED_MODEL",
+            )
+        }
+        try:
+            os.environ["EMBED_PROVIDER"] = "openai"
+            os.environ["EMBED_API_BASE"] = "https://api.deepseek.com"
+            os.environ["EMBED_API_KEY"] = "sk-test"
+            os.environ["EMBED_MODEL"] = "deepseek-v4-flash"
+            os.environ.pop("DEEPSEEK_API_KEY", None)
+            os.environ.pop("OPENAI_API_KEY", None)
+
+            config = mm._embedding_config_from_env()
+
+            self.assertEqual(config["provider"], "openai")
+            self.assertEqual(config["api_base"], "https://api.deepseek.com")
+            self.assertEqual(config["api_key"], "sk-test")
+            self.assertEqual(config["model"], "deepseek-v4-flash")
+            self.assertEqual(
+                mm._openai_embeddings_url(config["api_base"], config["api_path"]),
+                "https://api.deepseek.com/embeddings",
+            )
+        finally:
+            for key, value in old_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            mm._embed = lambda _text: None
+
     def test_remember_writes_emotional_fields_and_decay_rate(self):
         mm.remember("phase2 facts memory", category="facts")
         facts = _fetch_memory("phase2 facts memory")
