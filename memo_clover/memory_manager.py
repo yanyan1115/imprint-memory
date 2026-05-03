@@ -25,18 +25,49 @@ from .db import (
 logger = logging.getLogger(__name__)
 
 # ─── Embedding Config ────────────────────────────────────
-EMBED_PROVIDER = os.environ.get("EMBED_PROVIDER", "ollama")  # "ollama" or "openai"
-
-# Ollama settings
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-
-# OpenAI-compatible settings (also works with Voyage AI, Azure, etc.)
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-EMBED_API_BASE = os.environ.get("EMBED_API_BASE", "https://api.openai.com")
-
-# Model defaults per provider
 _DEFAULT_MODELS = {"ollama": "bge-m3", "openai": "text-embedding-3-small"}
-EMBED_MODEL = os.environ.get("EMBED_MODEL", _DEFAULT_MODELS.get(EMBED_PROVIDER, "bge-m3"))
+
+
+def _embedding_config_from_env() -> dict[str, str]:
+    """Resolve embedding settings while preserving legacy OPENAI_API_KEY support."""
+    provider = (os.environ.get("EMBED_PROVIDER") or "ollama").strip().lower()
+    return {
+        "provider": provider,
+        "ollama_url": (os.environ.get("OLLAMA_URL") or "http://localhost:11434").strip(),
+        "api_key": (
+            os.environ.get("EMBED_API_KEY")
+            or os.environ.get("DEEPSEEK_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or ""
+        ).strip(),
+        "api_base": (os.environ.get("EMBED_API_BASE") or "https://api.openai.com").strip(),
+        "api_path": (os.environ.get("EMBED_API_PATH") or "").strip(),
+        "model": (os.environ.get("EMBED_MODEL") or _DEFAULT_MODELS.get(provider, "bge-m3")).strip(),
+    }
+
+
+def _openai_embeddings_url(base: str | None = None, path: str | None = None) -> str:
+    """Build the embeddings URL for OpenAI-compatible providers."""
+    resolved_base = (base or EMBED_API_BASE or "https://api.openai.com").rstrip("/")
+    resolved_path = EMBED_API_PATH if path is None else path
+    resolved_path = (resolved_path or "").strip()
+    if resolved_path:
+        return f"{resolved_base}/{resolved_path.lstrip('/')}"
+    if resolved_base.lower().endswith("/v1"):
+        return f"{resolved_base}/embeddings"
+    if "api.deepseek.com" in resolved_base.lower():
+        return f"{resolved_base}/embeddings"
+    return f"{resolved_base}/v1/embeddings"
+
+
+_EMBED_CONFIG = _embedding_config_from_env()
+EMBED_PROVIDER = _EMBED_CONFIG["provider"]  # "ollama" or "openai"
+OLLAMA_URL = _EMBED_CONFIG["ollama_url"]
+EMBED_API_KEY = _EMBED_CONFIG["api_key"]
+OPENAI_API_KEY = EMBED_API_KEY
+EMBED_API_BASE = _EMBED_CONFIG["api_base"]
+EMBED_API_PATH = _EMBED_CONFIG["api_path"]
+EMBED_MODEL = _EMBED_CONFIG["model"]
 
 BANK_INDEX_VERSION = 2
 
@@ -84,11 +115,12 @@ def _embed_ollama(text: str) -> Optional[list[float]]:
 
 def _embed_openai(text: str) -> Optional[list[float]]:
     """Generate embedding via OpenAI-compatible API.
-    Works with: OpenAI, Voyage AI, Azure OpenAI, any OpenAI-compatible service.
+    Works with: OpenAI, DeepSeek-compatible gateways, Voyage AI, Azure OpenAI,
+    or any service exposing the OpenAI embeddings shape.
     Set EMBED_API_BASE to point to your provider."""
     if not OPENAI_API_KEY:
         logger.warning(
-            "OpenAI-compatible embedding is configured but OPENAI_API_KEY is empty; "
+            "OpenAI-compatible embedding is configured but EMBED_API_KEY/DEEPSEEK_API_KEY/OPENAI_API_KEY is empty; "
             "provider=%s model=%s base=%s. Vector retrieval will fall back to text-only search.",
             EMBED_PROVIDER,
             EMBED_MODEL,
@@ -96,7 +128,7 @@ def _embed_openai(text: str) -> Optional[list[float]]:
         )
         return None
     try:
-        url = f"{EMBED_API_BASE.rstrip('/')}/v1/embeddings"
+        url = _openai_embeddings_url()
         payload = json.dumps({"model": EMBED_MODEL, "input": text}).encode()
         req = urllib.request.Request(
             url,
@@ -112,19 +144,19 @@ def _embed_openai(text: str) -> Optional[list[float]]:
             if items and "embedding" in items[0]:
                 return items[0]["embedding"]
             logger.warning(
-                "OpenAI-compatible embedding returned an empty payload; provider=%s model=%s base=%s. "
+                "OpenAI-compatible embedding returned an empty payload; provider=%s model=%s url=%s. "
                 "Vector retrieval will fall back to text-only search.",
                 EMBED_PROVIDER,
                 EMBED_MODEL,
-                EMBED_API_BASE,
+                url,
             )
     except Exception as exc:
         logger.warning(
-            "OpenAI-compatible embedding failed; provider=%s model=%s base=%s error=%s. "
+            "OpenAI-compatible embedding failed; provider=%s model=%s url=%s error=%s. "
             "Vector retrieval will fall back to text-only search.",
             EMBED_PROVIDER,
             EMBED_MODEL,
-            EMBED_API_BASE,
+            url,
             exc,
             exc_info=True,
         )

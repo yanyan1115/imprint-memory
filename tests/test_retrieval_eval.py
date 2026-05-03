@@ -98,6 +98,7 @@ def _ids_by_content(results: list[dict]) -> dict[str, dict]:
 
 class RetrievalEvaluationTests(unittest.TestCase):
     def setUp(self):
+        mm._embed = _mock_embed
         _reset_database()
         mm.BANK_DIR.mkdir(parents=True, exist_ok=True)
         for path in mm.BANK_DIR.glob("*.md"):
